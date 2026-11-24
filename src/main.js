@@ -487,15 +487,26 @@ const lampLights = lampPosts.flatMap((p) => p.children.filter((c) => c.isPointLi
 const lampGlows = lampPosts.flatMap((p) => p.children.filter((c) => c.isSprite));
 const mixNum = ([a, b], t) => a + (b - a) * t;
 const mixColor = (target, [a, b], t) => target.copy(a).lerp(b, t);
+const OVERCAST_SKY = new THREE.Color("#7d8794");
+const OVERCAST_LIGHT = new THREE.Color("#a3adbb");
+let rainAmount = 0; // 0 = dry, 1 = full rain (eased in the loop)
 // t: 0 = night, 1 = day
 function applyLook(t) {
   mixColor(scene.background, LOOK.background, t);
+  // overcast: by day the rain greys the sky; at night it only dims a little
+  const overcast = rainAmount * t;
+  scene.background.lerp(OVERCAST_SKY, 0.65 * overcast);
   scene.fog.color.copy(scene.background);
+  // rain closes the fog in
+  scene.fog.near = 50 - 12 * rainAmount;
+  scene.fog.far = 140 - 22 * rainAmount;
   mixColor(skyLight.color, LOOK.skyTop, t);
+  skyLight.color.lerp(OVERCAST_LIGHT, 0.5 * overcast);
   mixColor(skyLight.groundColor, LOOK.skyGround, t);
-  skyLight.intensity = mixNum(LOOK.skyIntensity, t);
+  const gloom = 1 - (0.2 + 0.2 * t) * rainAmount;
+  skyLight.intensity = mixNum(LOOK.skyIntensity, t) * gloom;
   mixColor(sun.color, LOOK.sunColor, t);
-  sun.intensity = mixNum(LOOK.sunIntensity, t);
+  sun.intensity = mixNum(LOOK.sunIntensity, t) * gloom;
   for (const l of lampLights) l.intensity = mixNum(LOOK.lampIntensity, t);
   for (const g of lampGlows) g.material.opacity = mixNum(LOOK.glowOpacity, t);
   mixColor(lightMaterial.color, LOOK.lantern, t);
@@ -526,6 +537,242 @@ dayNightBtn.addEventListener("click", (e) => {
 addEventListener("keydown", (e) => {
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
   if (!typing && !e.repeat && e.key.toLowerCase() === "n") toggleDayNight();
+});
+
+// Rain: thin streaks in a box that follows the player, splashes where they land (rings on the
+// pond), shiny wet ground and a little fog.
+// Only for you, remembered (like day/night). Nothing goes to the server.
+let isRaining = false;
+try { isRaining = localStorage.getItem("weather") === "rain"; } catch {}
+if (isRaining) {
+  rainAmount = 1;
+  applyLook(dayAmount); // first frame already overcast
+}
+const RAIN = { count: MOBILE ? 600 : 1800, radius: 40, height: 40, fall: 38, wind: 5 };
+const rainDrops = new Float32Array(RAIN.count * 3); // x, y, z of each drop's head
+const rainFloor = new Float32Array(RAIN.count); // where each drop stops (ground, roof or water)
+const rainLen = new Float32Array(RAIN.count);
+const rainSpeed = new Float32Array(RAIN.count);
+for (let i = 0; i < RAIN.count; i++) {
+  rainDrops[i * 3] = (Math.random() * 2 - 1) * RAIN.radius;
+  rainDrops[i * 3 + 1] = Math.random() * RAIN.height;
+  rainDrops[i * 3 + 2] = (Math.random() * 2 - 1) * RAIN.radius;
+  rainFloor[i] = -1e3;
+  rainLen[i] = 0.5 + Math.random() * 0.9;
+  rainSpeed[i] = 0.8 + Math.random() * 0.4;
+}
+const rainLines = new Float32Array(RAIN.count * 6); // head + tail per drop
+const rainAlpha = new Float32Array(RAIN.count * 2); // head brighter than the tail
+for (let i = 0; i < RAIN.count; i++) {
+  rainAlpha[i * 2] = 0.5 + Math.random() * 0.5;
+  rainAlpha[i * 2 + 1] = 0;
+}
+const rainGeometry = new THREE.BufferGeometry();
+rainGeometry.setAttribute("position", new THREE.BufferAttribute(rainLines, 3).setUsage(THREE.DynamicDrawUsage));
+rainGeometry.setAttribute("alpha", new THREE.BufferAttribute(rainAlpha, 1));
+const rainUniforms = { uOpacity: { value: 0 }, uColor: { value: new THREE.Color("#dfe7f2") } };
+const rainMaterial = new THREE.ShaderMaterial({
+  uniforms: rainUniforms,
+  transparent: true,
+  depthWrite: false,
+  vertexShader: `attribute float alpha; varying float vA;
+    void main() { vA = alpha; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform float uOpacity; uniform vec3 uColor; varying float vA;
+    void main() { gl_FragColor = vec4(uColor, vA * uOpacity); }`,
+});
+const rainMesh = new THREE.LineSegments(rainGeometry, rainMaterial);
+rainMesh.frustumCulled = false; // positions move every frame
+rainMesh.visible = false;
+scene.add(rainMesh);
+
+// Where a drop stops: highest surface (so it stops on roofs), and whether it is the pond.
+// Cached on a 1-unit grid; at most a few new raycasts per frame.
+const surfaceCache = new Map();
+let surfaceBudget = 0;
+function surfaceAt(x, z) {
+  const key = Math.round(x) * 1000 + Math.round(z);
+  let s = surfaceCache.get(key);
+  if (s) return s;
+  if (!townMeshes.length || surfaceBudget <= 0) return null;
+  surfaceBudget--;
+  ray.set(new THREE.Vector3(Math.round(x), 200, Math.round(z)), DOWN);
+  const hits = ray.intersectObjects(townMeshes, false);
+  const wet = hits.find((h) => waterMeshes.has(h.object));
+  s = wet ? { y: wet.point.y, water: true } : hits[0] ? { y: hits[0].point.y, water: false } : { y: 0, water: false };
+  surfaceCache.set(key, s);
+  return s;
+}
+
+// Splashes: expanding rings that fade (small on the ground, bigger on the pond).
+const SPLASH = MOBILE ? 150 : 400;
+const splashPos = new Float32Array(SPLASH * 3);
+const splashAge = new Float32Array(SPLASH).fill(1);
+const splashSize = new Float32Array(SPLASH);
+let splashNext = 0;
+// Each splash is a small flat square lying on the surface (instanced), so the ground, trees and
+// houses in front cover it normally. The ring is drawn in the fragment shader.
+const splashGeometry = new THREE.InstancedBufferGeometry();
+const splashBase = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+splashGeometry.index = splashBase.index;
+splashGeometry.setAttribute("position", splashBase.attributes.position);
+splashGeometry.setAttribute("uv", splashBase.attributes.uv);
+splashGeometry.setAttribute("offset", new THREE.InstancedBufferAttribute(splashPos, 3).setUsage(THREE.DynamicDrawUsage));
+splashGeometry.setAttribute("age", new THREE.InstancedBufferAttribute(splashAge, 1).setUsage(THREE.DynamicDrawUsage));
+splashGeometry.setAttribute("size", new THREE.InstancedBufferAttribute(splashSize, 1).setUsage(THREE.DynamicDrawUsage));
+splashGeometry.instanceCount = SPLASH;
+const splashMaterial = new THREE.ShaderMaterial({
+  uniforms: rainUniforms,
+  transparent: true,
+  depthWrite: false,
+  polygonOffset: true,
+  polygonOffsetFactor: -4,
+  vertexShader: `attribute vec3 offset; attribute float age; attribute float size;
+    varying float vAge; varying vec2 vUv;
+    void main() {
+      vAge = age; vUv = uv;
+      float s = age >= 1.0 ? 0.0 : size * (0.4 + age) * 0.45;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position * s + offset, 1.0);
+    }`,
+  fragmentShader: `uniform float uOpacity; uniform vec3 uColor; varying float vAge; varying vec2 vUv;
+    void main() {
+      float d = length(vUv * 2.0 - 1.0);
+      float ring = smoothstep(0.2, 0.0, abs(d - 0.75));
+      float a = ring * (1.0 - vAge) * uOpacity * 2.2;
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(uColor, a);
+    }`,
+});
+const splashMesh = new THREE.Mesh(splashGeometry, splashMaterial);
+splashMesh.frustumCulled = false;
+splashMesh.visible = false;
+splashMesh.renderOrder = 10; // after the water and its light patches
+scene.add(splashMesh);
+function splash(x, y, z, water) {
+  const i = splashNext;
+  splashNext = (splashNext + 1) % SPLASH;
+  splashPos[i * 3] = x;
+  splashPos[i * 3 + 1] = y + 0.05;
+  splashPos[i * 3 + 2] = z;
+  splashAge[i] = 0;
+  splashSize[i] = water ? 2.2 + Math.random() * 1.0 : 0.7 + Math.random() * 0.4;
+}
+
+const wetMaterials = [];
+let wetReady = false;
+// Wet look: the town's materials become shiny (Phong) and a bit darker while it rains,
+// so the ground catches the lamps and the sky like a wet street. No extra meshes.
+function prepareWet() {
+  if (wetReady || !townMeshes.length) return;
+  wetReady = true;
+  const swapped = new Map();
+  for (const o of townMeshes) {
+    const swap = (m) => {
+      if (!m || m === waterMaterial || !m.isMeshLambertMaterial) return m;
+      if (!swapped.has(m)) {
+        const p = new THREE.MeshPhongMaterial({
+          map: m.map, color: m.color, alphaTest: m.alphaTest, side: m.side,
+          flatShading: m.flatShading, transparent: m.transparent, opacity: m.opacity,
+          specular: "#000000", shininess: 40,
+        });
+        // only surfaces facing up shine (ground, roads), not tree sides or the pond edge
+        p.onBeforeCompile = (sh) => {
+          sh.vertexShader = sh.vertexShader
+            .replace("#include <common>", "#include <common>\nvarying float vUp;")
+            .replace("#include <beginnormal_vertex>", "#include <beginnormal_vertex>\nvUp = normalize((modelMatrix * vec4(objectNormal, 0.0)).xyz).y;");
+          sh.fragmentShader = sh.fragmentShader
+            .replace("#include <common>", "#include <common>\nvarying float vUp;")
+            .replace("#include <lights_fragment_end>", "#include <lights_fragment_end>\nreflectedLight.directSpecular *= smoothstep(0.9, 0.98, abs(vUp));");
+        };
+        wetMaterials.push({ m: p, base: m.color.clone() });
+        swapped.set(m, p);
+      }
+      return swapped.get(m);
+    };
+    o.material = Array.isArray(o.material) ? o.material.map(swap) : swap(o.material);
+  }
+  applyWet();
+}
+const WET_SHINE = new THREE.Color("#8a96aa");
+function applyWet() {
+  const k = 1 - 0.18 * rainAmount;
+  for (const { m, base } of wetMaterials) {
+    m.color.copy(base).multiplyScalar(k);
+    m.specular.copy(WET_SHINE).multiplyScalar(rainAmount);
+  }
+}
+
+function updateRain(dt) {
+  const target = isRaining ? 1 : 0;
+  if (rainAmount !== target) {
+    rainAmount += Math.sign(target - rainAmount) * Math.min(dt * 0.7, Math.abs(target - rainAmount));
+    applyLook(dayAmount);
+    applyWet();
+  }
+  if (isRaining) prepareWet();
+  rainMesh.visible = splashMesh.visible = rainAmount > 0;
+  if (!rainMesh.visible) return;
+  rainUniforms.uOpacity.value = 0.45 * rainAmount;
+  rainUniforms.uColor.value.set(dayAmount > 0.5 ? "#e8eef6" : "#b9c8e0");
+  surfaceBudget = 40;
+  const { radius, height, fall, wind } = RAIN;
+  const top = pos.y + height;
+  for (let i = 0; i < RAIN.count; i++) {
+    const j = i * 3;
+    const v = fall * rainSpeed[i];
+    let x = rainDrops[j] + wind * dt;
+    let y = rainDrops[j + 1] - v * dt;
+    let z = rainDrops[j + 2];
+    // keep the drops in a box around the player (wrap around its edges)
+    if (x - pos.x > radius) x -= radius * 2;
+    else if (x - pos.x < -radius) x += radius * 2;
+    if (z - pos.z > radius) z -= radius * 2;
+    else if (z - pos.z < -radius) z += radius * 2;
+    if (rainFloor[i] < -100) rainFloor[i] = surfaceAt(x, z)?.y ?? pos.y;
+    if (y < rainFloor[i]) {
+      const s = surfaceAt(x, z);
+      if (s && Math.random() < (s.water ? 0.9 : 0.5) * rainAmount) splash(x, s.y, z, s.water);
+      x = pos.x + (Math.random() * 2 - 1) * radius;
+      z = pos.z + (Math.random() * 2 - 1) * radius;
+      y = top - Math.random() * 6;
+      rainFloor[i] = surfaceAt(x, z)?.y ?? pos.y;
+    }
+    rainDrops[j] = x;
+    rainDrops[j + 1] = y;
+    rainDrops[j + 2] = z;
+    const len = rainLen[i];
+    const k = i * 6;
+    rainLines[k] = x;
+    rainLines[k + 1] = y;
+    rainLines[k + 2] = z;
+    rainLines[k + 3] = x - (wind / v) * len;
+    rainLines[k + 4] = y + len;
+    rainLines[k + 5] = z;
+  }
+  rainGeometry.attributes.position.needsUpdate = true;
+  for (let i = 0; i < SPLASH; i++) if (splashAge[i] < 1) splashAge[i] = Math.min(1, splashAge[i] + dt * 3.2);
+  splashGeometry.attributes.offset.needsUpdate = true;
+  splashGeometry.attributes.age.needsUpdate = true;
+  splashGeometry.attributes.size.needsUpdate = true;
+}
+const rainBtn = document.querySelector("#rain");
+function drawRain() {
+  const label = isRaining ? "stop the rain" : "make it rain";
+  rainBtn.textContent = MOBILE ? label : `${label} · R`;
+  rainBtn.title = `${label} (R)`;
+}
+function toggleRain() {
+  isRaining = !isRaining;
+  try { localStorage.setItem("weather", isRaining ? "rain" : "clear"); } catch {}
+  drawRain();
+}
+drawRain();
+rainBtn.addEventListener("click", (e) => {
+  toggleRain();
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+addEventListener("keydown", (e) => {
+  const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === "r") toggleRain();
 });
 
 let townMeshes = [];
@@ -1553,6 +1800,7 @@ function loop() {
     dayAmount += Math.sign(dayTarget - dayAmount) * Math.min(dt, Math.abs(dayTarget - dayAmount));
     applyLook(dayAmount);
   }
+  updateRain(dt);
   let dx = 0,
     dz = 0;
   if (keys.arrowup || keys.w) {

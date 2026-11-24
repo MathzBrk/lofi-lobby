@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- **Rain**: a button in the top card (and the R key) turns on rain with a short fade: thin drops that stop on roofs, splash rings on the ground and the pond, shiny wet ground and a little fog; by day the sky also turns grey. Only for you, and remembered.
+- The HUD panels are more opaque with lighter grey text, and the shortcut bar sits between the radio and the chat instead of over the radio.
 - Admin menu shows who a player is: a short tag of their IP (never the IP), who else is online with it, and the names it used in the last 6 hours.
 - **Chat history**: whoever joins sees the last 30 messages from the last 2 hours.
 - **Moderation**: bad names are refused, bad chat words become `***`, and the admin can kick or ban by clicking a player's name (`/unban` in the chat lifts bans).

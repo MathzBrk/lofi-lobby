@@ -9,18 +9,19 @@
 <style>
   html, body { margin: 0; height: 100%; background: #000; overflow: hidden; font-family: Silkscreen, monospace; }
   canvas { display: block; image-rendering: pixelated; }
-  .glass { position: fixed; background: rgba(10,10,14,.62); border: 1px solid rgba(255,255,255,.14);
-           border-radius: 8px; backdrop-filter: blur(6px); color: #F2F2F5; }
+  .glass { position: fixed; background: rgba(10,11,16,.84); border: 1px solid rgba(255,255,255,.16);
+           border-radius: 8px; backdrop-filter: blur(10px); color: #F2F2F5; box-shadow: 0 6px 24px rgba(0,0,0,.35); }
   #place { left: 28px; top: 28px; padding: 12px 20px; }
   #place b { display: block; font-size: 22px; font-weight: 400; }
-  #place small { color: #A6A8B8; font-size: 12px; }
-  #hint { left: 50%; bottom: 24px; transform: translateX(-50%); padding: 8px 14px; font-size: 12px; color: #A6A8B8; }
+  #place small { color: #C4C6D4; font-size: 12px; }
+  #hint { left: 500px; right: 360px; bottom: 28px; padding: 8px 14px; font-size: 11px; line-height: 17px; color: #C4C6D4; text-align: center; }
+  @media (max-width: 1180px) { #hint { display: none; } }
   #radio { left: 28px; bottom: 28px; padding: 10px; display: flex; gap: 12px; align-items: center; max-width: 420px; }
   #radio .tv { position: relative; width: 176px; height: 99px; border-radius: 4px; overflow: hidden; background: #000; flex-shrink: 0; pointer-events: none; }
   #radio .tv iframe { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
   #radio .tv .tv-cover { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
   #radio .tv .tv-cover[hidden] { display: none; }
-  #radio small { display: block; color: #A6A8B8; font-size: 11px; margin-bottom: 4px; }
+  #radio small { display: block; color: #C4C6D4; font-size: 11px; margin-bottom: 4px; }
   #mute { display: inline-grid; place-items: center; vertical-align: middle; margin-left: 6px; width: 22px; height: 22px; padding: 0;
           color: #F2F2F5; background: rgba(0,0,0,.4); border: 1px solid rgba(255,255,255,.16); border-radius: 6px; cursor: pointer; pointer-events: auto; }
   #mute:hover, #mute.on { border-color: #ffc95a; color: #ffc95a; }
@@ -28,14 +29,14 @@
   #chat { right: 20px; top: 20px; bottom: 20px; width: 320px; display: flex; flex-direction: column; }
   #chat header { padding: 18px 20px 14px; border-bottom: 1px solid rgba(255,255,255,.12); display: flex; justify-content: space-between; align-items: baseline; }
   #chat header b { font-weight: 400; font-size: 18px; }
-  #chat header small { color: #A6A8B8; font-size: 11px; }
+  #chat header small { color: #C4C6D4; font-size: 11px; }
   /* min-height: 0 lets the list shrink and scroll inside the flex column; margin-top: auto on the
      first message keeps few messages at the bottom (justify-content: flex-end would cut off the top) */
   #msgs { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
           padding: 14px 20px; display: flex; flex-direction: column; gap: 12px; }
   #msgs > :first-child { margin-top: auto; }
   #msgs .m small { display: block; font-size: 11px; color: #ffc95a; margin-bottom: 2px; }
-  #msgs .m span { font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
+  #msgs .m span { font-size: 13px; line-height: 20px; color: #F2F2F5; overflow-wrap: anywhere; }
   #chat form { padding: 14px 16px 16px; display: flex; gap: 8px; }
   #chat input { flex: 1; min-width: 0; font: inherit; font-size: 13px; color: #F2F2F5; background: rgba(0,0,0,.35);
                 border: 1px solid rgba(255,255,255,.14); border-radius: 6px; padding: 10px 12px; outline: none; }
@@ -43,7 +44,7 @@
   #send { display: grid; place-items: center; width: 42px; flex-shrink: 0; color: #1b1406; background: #ffc95a; border: 0; border-radius: 6px; padding: 0; cursor: pointer; }
   #send:hover { background: #ffd47a; }
   #send:active { transform: translateY(1px); }
-  #chat input::placeholder { color: #7d8094; }
+  #chat input::placeholder { color: #9a9db0; }
   /* bubble + arrow as a single shape (clip-path): one background, no double
      transparency where the arrow meets the bubble; the outline comes from the shape's drop-shadow */
   .bubble { position: fixed; transform: translate(-50%, -100%); pointer-events: none; z-index: 2;
@@ -52,10 +53,10 @@
                 color: #F2F2F5; text-align: center; overflow-wrap: anywhere; background: rgba(0,0,0,.74);
                 clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(50% + 6px) calc(100% - 7px),
                                    50% 100%, calc(50% - 6px) calc(100% - 7px), 0 calc(100% - 7px)); }
-  #switch-trainer, #day-night { display: inline-block; margin-top: 8px; font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(0,0,0,.4);
-                   border: 1px solid rgba(255,255,255,.16); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
-  #day-night { margin-left: 6px; }
-  #switch-trainer:hover, #day-night:hover { border-color: #ffc95a; color: #ffc95a; }
+  #switch-trainer, #day-night, #rain { display: inline-block; margin-top: 10px; font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(255,255,255,.06);
+                   border: 1px solid rgba(255,255,255,.2); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
+  #day-night, #rain { margin-left: 6px; }
+  #switch-trainer:hover, #day-night:hover, #rain:hover { border-color: #ffc95a; color: #ffc95a; }
   .tag.mod { pointer-events: auto; cursor: pointer; }
   .tag.mod:hover, #msgs .m small.mod:hover { color: #ffc95a; text-decoration: underline; }
   #msgs .m small.mod { cursor: pointer; }
@@ -98,7 +99,7 @@
   #enter-name { font: inherit; font-size: 16px; text-align: center; color: #ffc95a; background: rgba(0,0,0,.4); width: 220px;
                 border: 1px solid rgba(255,255,255,.2); border-radius: 8px; padding: 10px 12px; outline: none; }
   #enter-name:focus { border-color: #ffc95a; }
-  #place .me { margin-top: 6px; font-size: 11px; color: #A6A8B8; }
+  #place .me { margin-top: 6px; font-size: 11px; color: #C4C6D4; }
   #enter .genders { display: flex; gap: 10px; }
   #enter .genders button { font-size: 14px; padding: 10px 18px; }
   #enter .genders button.on { border-color: #ffc95a; color: #ffc95a; }
@@ -119,8 +120,8 @@
     #place { left: 12px; top: calc(12px + env(safe-area-inset-top)); padding: 10px 14px 12px; max-width: calc(100vw - 24px); }
     #place b { font-size: 16px; }
     #place small { display: block; font-size: 10px; }
-    #switch-trainer, #day-night, #pause-btn { font-size: 11px; padding: 6px 10px; }
-    #day-night { margin: 10px 0 0 8px; }
+    #switch-trainer, #day-night, #rain, #pause-btn { font-size: 11px; padding: 6px 10px; }
+    #day-night, #rain { margin: 10px 0 0 8px; }
     #pause-btn { display: inline-block; margin: 10px 0 0 8px; cursor: pointer; font: inherit; font-size: 11px; padding: 6px 10px; color: #F2F2F5; background: rgba(0,0,0,.4);
                  border: 1px solid rgba(255,255,255,.16); border-radius: 6px; }
     #switch-trainer { display: inline-block; margin-top: 10px; }
@@ -149,13 +150,13 @@
 <body>
 <div id="place" class="glass"><b>Lofi Lobby</b><small>room lobby · 1 trainer</small>
   <div class="me">you: <button id="my-name" title="change name"></button> ✎</div>
-  <button id="switch-trainer" title="switch trainer (G)">switch trainer · G</button><button id="day-night" type="button" title="make it day (N)">make it day · N</button><button id="pause-btn" type="button">pause</button>
+  <button id="switch-trainer" title="switch trainer (G)">switch trainer · G</button><button id="day-night" type="button" title="make it day (N)">make it day · N</button><button id="rain" type="button" title="make it rain (R)">make it rain · R</button><button id="pause-btn" type="button">pause</button>
 </div>
 <form id="admin-login" class="glass" hidden autocomplete="off"><b>admin login</b>
   <input type="password" placeholder="password" aria-label="admin password" />
   <div><button type="button" data-cancel>cancel</button><button type="submit">log in</button></div>
 </form>
-<div id="hint" class="glass">arrows / WASD to walk · Shift to run · M to mute · N for day/night · space to pause</div>
+<div id="hint" class="glass">arrows / WASD to walk · Shift to run · M to mute · N for day/night · R for rain · space to pause</div>
 <div id="radio" class="glass">
   <div class="tv"><div id="yt"></div></div>
   <div><small>now playing <button id="mute" type="button" title="mute (M)" aria-label="mute"></button></small><b id="title">—</b>
