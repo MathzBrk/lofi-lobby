@@ -521,8 +521,8 @@ applyLook(dayAmount);
 const dayNightBtn = document.querySelector("#day-night");
 function drawDayNight() {
   const label = isDay ? "make it night" : "make it day";
-  dayNightBtn.textContent = MOBILE ? label : `${label} · N`;
-  dayNightBtn.title = `${label} (N)`;
+  dayNightBtn.innerHTML = isDay ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>' : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  dayNightBtn.setAttribute("aria-label", label);
 }
 function toggleDayNight() {
   isDay = !isDay;
@@ -757,8 +757,8 @@ function updateRain(dt) {
 const rainBtn = document.querySelector("#rain");
 function drawRain() {
   const label = isRaining ? "stop the rain" : "make it rain";
-  rainBtn.textContent = MOBILE ? label : `${label} · R`;
-  rainBtn.title = `${label} (R)`;
+  rainBtn.classList.toggle("on", isRaining);
+  rainBtn.setAttribute("aria-label", label);
 }
 function toggleRain() {
   isRaining = !isRaining;
@@ -1331,7 +1331,18 @@ function savePosition(now) {
   try { localStorage.setItem("position", state); } catch {}
 }
 const SPEED = 9;
+// respawn asks for a second click, so a curious click doesn't teleport you
+let respawnTimer = 0;
 document.querySelector("#respawn").addEventListener("click", (e) => {
+  const btn = e.currentTarget;
+  if (!btn.classList.contains("confirm")) {
+    btn.classList.add("confirm");
+    clearTimeout(respawnTimer);
+    respawnTimer = setTimeout(() => btn.classList.remove("confirm"), 3000);
+    return;
+  }
+  clearTimeout(respawnTimer);
+  btn.classList.remove("confirm");
   pos.set(0, 0, 0);
   lastSaved = 0;
   savePosition(performance.now());
@@ -1475,7 +1486,7 @@ function removeOther(id) {
 function updateCount() {
   const el = document.querySelector("#place small");
   if (el)
-    el.textContent = `room ${ROOM} · ${others.size + 1} trainer${others.size ? "s" : ""}`;
+    el.textContent = `${others.size + 1} online`;
 }
 
 let meAdmin = false; // the server confirmed this connection is the admin
