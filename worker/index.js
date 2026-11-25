@@ -148,7 +148,10 @@ export class Room {
       if (!r.ok) out.errors = [...(out.errors || []), key + ": " + (await r.text()).slice(0, 200)];
     }));
     try { out.connections = await this.connections(); } catch (e) { out.connections = []; (out.errors ||= []).push("connections: " + e.message); }
+    // connections: archived days under the live ~31 days
+    const live = new Set(out.connections.map((c) => c.day));
     out.archive = [...(await this.state.storage.list({ prefix: "day:" }))].map(([k, v]) => ({ day: k.slice(4), ...v }));
+    for (const a of out.archive) if (a.connections != null && !live.has(a.day)) out.connections.push({ day: a.day, requests: a.connections });
     return Response.json(out, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -175,15 +178,24 @@ export class Room {
   // daily cron: keep every finished day (of the last 80) in storage, forever
   async archive() {
     if (!this.env.CF_ACCOUNT_ID || !this.env.CF_API_TOKEN) return;
+    // Cloudflare's own count only goes ~31 days back, so it is archived too
+    const today = new Date().toISOString().slice(0, 10);
+    for (const c of await this.connections().catch(() => [])) {
+      if (c.day >= today) continue;
+      const key = "day:" + c.day;
+      const saved = (await this.state.storage.get(key)) || {};
+      if (saved.connections == null) await this.state.storage.put(key, { ...saved, connections: c.requests });
+    }
     for (let i = 80; i >= 1; i--) {
       const day = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
-      if (await this.state.storage.get("day:" + day)) continue;
+      const saved = (await this.state.storage.get("day:" + day)) || {};
+      if (saved.joins != null) continue;
       const rows = await this.sql(dayQuery(day));
       if (!rows.length) continue;
       const by = Object.fromEntries(rows.map((r) => [r.event, r]));
       const joins = Number(by.join?.n || 0), leaves = Number(by.leave?.n || 0);
       await this.state.storage.put("day:" + day, {
-        joins, visitors: Number(by.join?.visitors || 0), peak: Number(by.join?.peak || 0),
+        ...saved, joins, visitors: Number(by.join?.visitors || 0), peak: Number(by.join?.peak || 0),
         avgSeconds: leaves ? Number(by.leave.seconds) / leaves : 0, messages: Number(by.chat?.n || 0),
       });
     }
