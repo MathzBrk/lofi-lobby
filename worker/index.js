@@ -33,6 +33,7 @@ const MAX_BYTES = 1024;
 const COORD_LIMIT = 500;
 const ADMIN_ATTEMPTS = 20; // per IP, then locked for ADMIN_LOCK_MS (the "other" rate limit already caps tries at ~1/s)
 const ADMIN_LOCK_MS = 60_000;
+const MAX_SEATS = 16; // bench seats numbered 0..15 (bench * 2 + side); the client knows where each is
 const MAX_PER_IP = 3; // tabs/devices behind one IP
 const KICK_MS = 10 * 60_000; // kick = a short ban, so the client's auto-reconnect doesn't undo it
 const BAN_MS = 7 * 24 * 60 * 60_000;
@@ -96,7 +97,7 @@ export class Room {
     // hibernation: the DO can sleep with connections open; each player's
     // state lives on its own socket (serializeAttachment)
     this.state.acceptWebSocket(server);
-    server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, ip });
+    server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, seat: -1, ip });
     server.send(JSON.stringify({ t: "you", id }));
     const radio = await this.state.storage.get("radio");
     if (radio) server.send(JSON.stringify({ t: "radio", command: radio }));
@@ -108,7 +109,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, admin: !!p.admin };
   }
   players() {
     return this.state.getWebSockets().map((ws) => ws.deserializeAttachment()).filter(Boolean).map((p) => this.public(p));
@@ -175,6 +176,16 @@ export class Room {
       p.step = Math.abs(m.step | 0) % 4;
       ws.serializeAttachment(p);
       this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
+    } else if (m.t === "sit") {
+      // one player per seat; -1 stands up. A taken seat is refused back to the sender only.
+      const seat = Number.isInteger(m.seat) && m.seat >= 0 && m.seat < MAX_SEATS ? m.seat : -1;
+      if (seat >= 0 && this.players().some((q) => q.id !== p.id && q.seat === seat)) {
+        ws.send(JSON.stringify({ t: "seat", id: p.id, seat: -1 }));
+        return;
+      }
+      p.seat = seat;
+      ws.serializeAttachment(p);
+      this.broadcast({ t: "seat", id: p.id, seat });
     } else if (m.t === "auth") {
       if (!(await this.isAdmin(ws, p, m.password))) return;
       // everyone sees who the admin is (badge over the name, colour in the chat)

@@ -229,6 +229,7 @@ function prepareTown(fbx) {
         solidBoxes.push(new THREE.Box3().setFromObject(o));
     });
     placeLampPairs();
+    placeBenches();
 }
 
 // ---- Original village (default on the published site) ----
@@ -463,6 +464,103 @@ const LAMP_POSTS = [
 ];
 const lampPosts = LAMP_POSTS.map(([x, z]) => createLampPost(x, z));
 const lampPostSolids = lampPosts.flatMap((p) => p.children.filter((c) => c.isMesh));
+
+// ---- Benches ----
+// Built in code (no new art), two seats each, facing the road. A seat is numbered
+// bench * 2 + side; that number is all the server stores (MAX_SEATS in worker/index.js).
+const SEATS_PER_BENCH = 2;
+const SEAT_GAP = 1.1; // seat center, sideways from the bench center
+// There is no sitting frame: a sitter is the whole standing frame raised so the
+// hips rest on the seat and the short legs hang in front of it.
+const SIT_LIFT = 0.95; // height of the sprite's origin (feet) over the ground
+const SIT_RANGE = 3.6; // how close you must be to a seat to sit
+const SIDE_SEAT_FORWARD = 0.2; // on side benches, how far from the seat's middle toward its front
+const FACING = { down: [0, 1], up: [0, -1], left: [-1, 0], right: [1, 0] };
+const benches = []; // { x, y, z, face }
+const benchBoxes = [];
+// Park bench in the town's low-poly look: wooden slats in two tones over cast-iron
+// ends, the same iron as the lamp posts.
+const woodLight = new THREE.MeshLambertMaterial({ color: "#b07a45", flatShading: true });
+const woodDark = new THREE.MeshLambertMaterial({ color: "#8a5a34", flatShading: true });
+function createBench(x, y, z, face) {
+  const g = new THREE.Group();
+  const part = (mat, w, h, d, px, py, pz, tilt = 0) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(px, py, pz);
+    m.rotation.x = tilt;
+    m.castShadow = m.receiveShadow = true;
+    g.add(m);
+  };
+  // local front is +z. Iron ends: front leg, back leg rising into the backrest,
+  // rail under the seat, armrest on top
+  for (const sx of [-2.15, 2.15]) {
+    part(ironMaterial, 0.22, 1.45, 0.22, sx, 0.72, 0.55);
+    part(ironMaterial, 0.22, 2.75, 0.22, sx, 1.37, -0.68, -0.08);
+    part(ironMaterial, 0.2, 0.18, 1.45, sx, 1.33, -0.05);
+    part(ironMaterial, 0.26, 0.16, 1.2, sx, 2.15, 0.05);
+  }
+  // seat: three slats with gaps, alternating tones (top at ~1.6, where a sitter's hips go)
+  [0.5, 0, -0.5].forEach((sz, i) =>
+    part(i % 2 ? woodDark : woodLight, 4.5, 0.18, 0.4, 0, 1.51, sz),
+  );
+  // backrest: two slats leaning back a little
+  part(woodDark, 4.5, 0.36, 0.14, 0, 2.0, -0.78, -0.08);
+  part(woodLight, 4.5, 0.36, 0.14, 0, 2.55, -0.83, -0.08);
+  g.position.set(x, y, z);
+  g.rotation.y = { down: 0, right: Math.PI / 2, up: Math.PI, left: -Math.PI / 2 }[face];
+  scene.add(g);
+  g.updateMatrixWorld(true);
+  benches.push({ x, y, z, face });
+  const box = new THREE.Box3().setFromObject(g);
+  solidBoxes.push(box); // nobody walks through it
+  benchBoxes.push(box); // and it hides whoever stands behind it (updateOcclusion)
+}
+// Each bench goes on the open spot nearest its wish (spiral search), so a town with another
+// layout still gets them. Seats stay under MAX_SEATS (16 = 8 benches).
+function placeBenches() {
+  const clear = (x, z) =>
+    isOpen(x, z, 2.6) &&
+    benches.every((b) => Math.hypot(b.x - x, b.z - z) > 6) &&
+    lampPosts.every((l) => Math.hypot(l.position.x - x, l.position.z - z) > 4.5);
+  for (const [x0, z0, face] of BENCH_SPOTS)
+    search: for (let r = 0; r <= 8; r += 0.5)
+      for (let a = 0; a < 16; a++) {
+        const x = x0 + Math.cos((a / 16) * Math.PI * 2) * r;
+        const z = z0 + Math.sin((a / 16) * Math.PI * 2) * r;
+        if (clear(x, z)) {
+          createBench(x, groundHeight(x, z), z, face);
+          break search;
+        }
+        if (r === 0) break; // the center has only one point to try
+      }
+}
+// Wished spots and facing (tweak freely). Side benches ("right"/"left") stand on the edge of
+// a path, so whoever sits is on the path's line. Skip the gaps between the back and front houses:
+// the front roofs hide anything there from the camera.
+const BENCH_SPOTS = [
+  [-8, 18.5, "down"], // sand path in front of the houses, middle
+  [12, 18.5, "down"], // sand path in front of the houses, right
+  [-23, 18.5, "right"], // left end of the sand path in front of the houses
+  [-4.5, -23.7, "right"], // back of the road, by the big house on the left
+  [3, -29, "left"], // right edge of the road at the very back, past the houses
+];
+// Where a seat is, and which way the sitter looks (null if that bench doesn't exist)
+function seatSpot(id) {
+  const b = benches[id >> 1];
+  if (!b) return null;
+  const [fx, fz] = FACING[b.face];
+  const side = id & 1 ? 1 : -1;
+  // On a bench facing the camera the billboard leans back, so its hips must start past the
+  // seat's front edge (0.75) or the seat and backrest cut through other players' sprites.
+  // A side bench runs along the billboard, so the sitter goes on the middle of the seat.
+  const fwd = fz ? 1.05 : SIDE_SEAT_FORWARD;
+  return {
+    x: b.x - fz * side * SEAT_GAP + fx * fwd,
+    z: b.z + fx * side * SEAT_GAP + fz * fwd,
+    y: b.y + SIT_LIFT,
+    dir: b.face,
+  };
+}
 
 // ---- Day / night ----
 // Only for you, like mute: it changes how you see the town, not the room.
@@ -1224,18 +1322,24 @@ vec4 feetClip = projectionMatrix * viewMatrix * vec4(uFeet, 1.0);
 gl_Position.z = (feetClip.z / feetClip.w) * gl_Position.w;`,
     );
 };
+const occlusionRay = new THREE.Ray();
+const _hit = new THREE.Vector3();
 function updateOcclusion() {
   // reference point: the feet, pulled a bit toward the camera
   const feet = new THREE.Vector3(pos.x, pos.y + 0.2, pos.z);
   // 2.4: covers the body height seen from above (tops of objects right behind
   // are closer to the camera than the feet). Smaller = objects behind cut the head;
   // larger = the sprite starts drawing over things that are in front of it.
-  const toCam = camera.position
-    .clone()
-    .sub(feet)
-    .normalize()
-    .multiplyScalar(2.4);
-  feetUniforms.uFeet.value.copy(feet.add(toCam));
+  const toCam = camera.position.clone().sub(feet).normalize();
+  // ...but never past a bench in front of you, or you'd be drawn over it while behind it
+  let pull = 2.4;
+  occlusionRay.set(feet, toCam);
+  for (const box of benchBoxes) {
+    if (box.containsPoint(feet)) continue; // sitting on it (side benches)
+    const hit = occlusionRay.intersectBox(box, _hit);
+    if (hit) pull = Math.min(pull, Math.max(0, feet.distanceTo(hit) - 0.1));
+  }
+  feetUniforms.uFeet.value.copy(feet.addScaledVector(toCam, pull));
 }
 
 // ---- Movement ----
@@ -1323,7 +1427,7 @@ function checkSavedPosition() {
 let lastSaved = 0,
   lastSavedState = "";
 function savePosition(now) {
-  if (now - lastSaved < 1000) return;
+  if (mySeat >= 0 || now - lastSaved < 1000) return;
   lastSaved = now;
   const state = JSON.stringify({ x: +pos.x.toFixed(2), z: +pos.z.toFixed(2), dir });
   if (state === lastSavedState) return;
@@ -1331,6 +1435,69 @@ function savePosition(now) {
   try { localStorage.setItem("position", state); } catch {}
 }
 const SPEED = 9;
+
+// ---- Sitting ----
+let mySeat = -1;
+const sendSeat = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "sit", seat: mySeat }));
+const seatTaken = (id) => [...others.values()].some((o) => o.seat === id);
+const sitBtn = document.querySelector("#sit");
+function nearestFreeSeat() {
+  let best = -1,
+    bestD = SIT_RANGE;
+  for (let id = 0; id < benches.length * SEATS_PER_BENCH; id++) {
+    const s = seatSpot(id);
+    const d = Math.hypot(s.x - pos.x, s.z - pos.z);
+    if (d < bestD && !seatTaken(id)) (best = id), (bestD = d);
+  }
+  return best;
+}
+function sit(id) {
+  const s = seatSpot(id);
+  if (!s) return;
+  mySeat = id;
+  pos.set(s.x, s.y, s.z);
+  dir = s.dir;
+  sendSeat();
+}
+// Stand up on the nearest free spot around the bench, starting from its front, then tell the room
+function standUp(notify = true) {
+  const s = seatSpot(mySeat);
+  mySeat = -1;
+  if (s) {
+    const [fx, fz] = FACING[s.dir];
+    const front = Math.atan2(fz, fx);
+    const ground = groundHeight(s.x, s.z);
+    search: for (let d = 2.4; d <= 7; d += 0.4)
+      for (let i = 0; i < 16; i++) {
+        // front first, then alternating to each side, back last
+        const a = front + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 8);
+        const x = s.x + Math.cos(a) * d,
+          z = s.z + Math.sin(a) * d;
+        if (isFree(x, z, ground)) {
+          pos.set(x, ground, z);
+          break search;
+        }
+      }
+  }
+  if (notify) sendSeat();
+}
+const toggleSit = () => {
+  if (gamePaused) return;
+  if (mySeat >= 0) return standUp();
+  const id = nearestFreeSeat();
+  if (id >= 0) sit(id);
+};
+sitBtn.addEventListener("click", (e) => {
+  toggleSit();
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+addEventListener("keydown", (e) => {
+  const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
+  const k = e.key.toLowerCase();
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "e") toggleSit();
+  // a quick tap on a move key can end before the next frame: stand up right away
+  else if (!typing && mySeat >= 0 && ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) standUp();
+});
 // respawn asks for a second click, so a curious click doesn't teleport you
 let respawnTimer = 0;
 document.querySelector("#respawn").addEventListener("click", (e) => {
@@ -1458,7 +1625,7 @@ function createOther(p) {
     alphaTest: 0.5,
   });
   mesh.castShadow = true;
-  mesh.scale.copy(sprite.scale);
+  mesh.scale.set(5, 5, 1);
   scene.add(mesh);
   const o = {
     mesh,
@@ -1467,6 +1634,7 @@ function createOther(p) {
     target: new THREE.Vector3(p.x, 0, p.z),
     dir: p.dir || "down",
     step: p.step || 0,
+    seat: Number.isInteger(p.seat) ? p.seat : -1,
     name: p.name,
     admin: !!p.admin,
   };
@@ -1497,6 +1665,7 @@ function connect() {
   ws = new WebSocket(`${proto}://${location.host}/ws/${ROOM}`);
   ws.onopen = () => {
     ws.send(JSON.stringify({ t: "hello", name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
+    if (mySeat >= 0) sendSeat(); // reconnected while sitting
     // a saved admin logs in again quietly, so everyone sees the admin badge
     let password = "";
     try { password = localStorage.getItem("admin-password") || ""; } catch {}
@@ -1552,12 +1721,21 @@ function connect() {
           z: o.target.z,
           dir: o.dir,
           step: o.step,
+          seat: o.seat,
           name: o.name,
           gender: m.gender,
           admin: o.admin,
         };
         removeOther(m.id);
         createOther(p);
+      }
+    } else if (m.t === "seat") {
+      // the server says who sits where; a refused seat (taken) stands you back up
+      if (m.id === myId) {
+        if (m.seat < 0 && mySeat >= 0) standUp(false);
+      } else {
+        const o = others.get(m.id);
+        if (o) o.seat = m.seat;
       }
     } else if (m.t === "pos") {
       const o = others.get(m.id) || createOther(m);
@@ -1606,9 +1784,13 @@ function updateOthers(dt) {
       o.target.z,
       Math.min(1, dt * 10),
     );
-    m.position.y = topHeight(m.position.x, m.position.z);
+    const seat = o.seat >= 0 ? seatSpot(o.seat) : null;
+    if (seat) {
+      m.position.set(seat.x, seat.y, seat.z);
+      o.target.set(seat.x, 0, seat.z);
+    } else m.position.y = topHeight(m.position.x, m.position.z);
     m.rotation.copy(sprite.rotation);
-    setFrameTex(o.tex, o.cfg, o.dir, o.step);
+    setFrameTex(o.tex, o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
   }
 }
 
@@ -1731,6 +1913,16 @@ function updateNameTags() {
 }
 
 const _v = new THREE.Vector3();
+// "press E to sit" over the nearest free seat, while you're close enough to take it
+const sitPrompt = document.querySelector("#sit-prompt");
+function updateSitPrompt(seat) {
+  const s = seat >= 0 && !gamePaused && !typing() ? seatSpot(seat) : null;
+  sitPrompt.hidden = !s;
+  if (!s) return;
+  _v.set(s.x, s.y + 5.2, s.z).project(camera); // above a standing trainer's name tag
+  sitPrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
+  sitPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
+}
 function updateBubbles() {
   const now = performance.now();
   for (const [owner, b] of bubbles) {
@@ -1865,6 +2057,7 @@ function loop() {
     dz = 0;
   }
   const run = keys.shift || stick.mag > 0.9;
+  if (mySeat >= 0 && (dx || dz)) standUp(); // any move key gets you up
   const walking = dx || dz;
   if (walking) {
     const n = Math.hypot(dx, dz);
@@ -1880,17 +2073,21 @@ function loop() {
   const running = Boolean(walking && run);
   setFrame(dir, currentStep, running);
   sendPosition(performance.now(), currentStep);
+  const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
+  sitBtn.hidden = mySeat < 0 && freeSeat < 0;
+  sitBtn.setAttribute("aria-label", mySeat >= 0 ? "stand up" : "sit");
   updateOthers(dt);
 
   // smooth the height so it doesn't jitter on small terrain steps
   pos.y = THREE.MathUtils.lerp(
     pos.y,
-    topHeight(pos.x, pos.z),
+    mySeat >= 0 ? seatSpot(mySeat).y : topHeight(pos.x, pos.z),
     Math.min(1, dt * 12),
   );
   sprite.position.copy(pos);
   if (running && GENDER === "male") sprite.position.y -= 0.8;
   shadow.position.set(pos.x, pos.y + 0.05, pos.z);
+  shadow.visible = mySeat < 0; // would float under the hanging feet
   updateOcclusion();
   camera.position.set(pos.x, pos.y + 38, pos.z + 42);
   camera.lookAt(pos.x, pos.y + 1, pos.z);
@@ -1900,6 +2097,7 @@ function loop() {
   renderer.render(scene, camera);
   updateNameTags();
   updateBubbles();
+  updateSitPrompt(freeSeat);
   requestAnimationFrame(loop);
 }
 loop();

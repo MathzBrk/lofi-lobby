@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Benches**: five park benches around the town (wooden slats on iron ends, like the lamp posts), two seats each, some facing the camera and some sideways along the paths. Walk up and a "press E to sit" note shows over the seat; press **E** (or the button that appears in the top card) to sit, and any move key stands you up. Everyone sees you sitting, a seat holds one player, and a bench hides whoever stands behind it.
 - Cleaner HUD: the top card buttons are icons with an instant label on hover and their key in the corner, the shortcut bar became a "?" list (shown once on the first visit), the player count reads "N online", the radio TV is smaller, and respawn asks for a second click.
 - **Full screen**: a button in the top card (and the F key) enters or leaves full screen, handy for leaving the lobby open next to your work. Only for you; hidden where the browser doesn't support it.
 - **Respawn** button in the top card: sends your trainer back to the spawn if you got stuck.
