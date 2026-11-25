@@ -1331,6 +1331,12 @@ function savePosition(now) {
   try { localStorage.setItem("position", state); } catch {}
 }
 const SPEED = 9;
+document.querySelector("#respawn").addEventListener("click", (e) => {
+  pos.set(0, 0, 0);
+  lastSaved = 0;
+  savePosition(performance.now());
+  e.currentTarget.blur();
+});
 
 const clock = new THREE.Clock();
 // ---- Multiplayer ----
