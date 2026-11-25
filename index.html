@@ -53,10 +53,10 @@
                 color: #F2F2F5; text-align: center; overflow-wrap: anywhere; background: rgba(0,0,0,.74);
                 clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(50% + 6px) calc(100% - 7px),
                                    50% 100%, calc(50% - 6px) calc(100% - 7px), 0 calc(100% - 7px)); }
-  #switch-trainer, #day-night, #rain { display: inline-block; margin-top: 10px; font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(255,255,255,.06);
+  #switch-trainer, #day-night, #rain, #respawn { display: inline-block; margin-top: 10px; font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(255,255,255,.06);
                    border: 1px solid rgba(255,255,255,.2); border-radius: 6px; padding: 5px 10px; cursor: pointer; }
-  #day-night, #rain { margin-left: 6px; }
-  #switch-trainer:hover, #day-night:hover, #rain:hover { border-color: #ffc95a; color: #ffc95a; }
+  #day-night, #rain, #respawn { margin-left: 6px; }
+  #switch-trainer:hover, #day-night:hover, #rain:hover, #respawn:hover { border-color: #ffc95a; color: #ffc95a; }
   .tag.mod { pointer-events: auto; cursor: pointer; }
   .tag.mod:hover, #msgs .m small.mod:hover { color: #ffc95a; text-decoration: underline; }
   #msgs .m small.mod { cursor: pointer; }
@@ -128,8 +128,8 @@
     #place { left: 12px; top: calc(12px + env(safe-area-inset-top)); padding: 10px 14px 12px; max-width: calc(100vw - 24px); }
     #place b { font-size: 16px; }
     #place small { display: block; font-size: 10px; }
-    #switch-trainer, #day-night, #rain, #pause-btn { font-size: 11px; padding: 6px 10px; }
-    #day-night, #rain { margin: 10px 0 0 8px; }
+    #switch-trainer, #day-night, #rain, #respawn, #pause-btn { font-size: 11px; padding: 6px 10px; }
+    #day-night, #rain, #respawn { margin: 10px 0 0 8px; }
     #pause-btn { display: inline-block; margin: 10px 0 0 8px; cursor: pointer; font: inherit; font-size: 11px; padding: 6px 10px; color: #F2F2F5; background: rgba(0,0,0,.4);
                  border: 1px solid rgba(255,255,255,.16); border-radius: 6px; }
     #switch-trainer { display: inline-block; margin-top: 10px; }
