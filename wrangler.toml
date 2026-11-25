@@ -19,6 +19,10 @@ new_sqlite_classes = ["Sala"]
 tag = "v2"
 renamed_classes = [{ from = "Sala", to = "Room" }]
 
+# archive yesterday's stats every day (Analytics Engine keeps 3 months)
+[triggers]
+crons = ["15 0 * * *"]
+
 # game stats (joins, leaves, chat counts; no IP or text), read by /api/stats
 [[analytics_engine_datasets]]
 binding = "STATS"

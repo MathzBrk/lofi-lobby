@@ -103,6 +103,18 @@ const STATS_QUERIES = {
           FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY gender`,
 };
 
+// one finished day, for the archive (Analytics Engine keeps only 3 months)
+const dayQuery = (day) => `SELECT blob1 AS event, SUM(_sample_interval) AS n, COUNT(DISTINCT blob4) AS visitors,
+  MAX(double1) AS peak, SUM(_sample_interval * double2) AS seconds
+  FROM lofi_lobby WHERE timestamp >= toDateTime('${day} 00:00:00') AND timestamp < toDateTime('${day} 00:00:00') + INTERVAL '1' DAY
+  GROUP BY event`;
+
+// Worker requests per day, measured by Cloudflare since launch (about 30 days back). With assets served
+// before the Worker, almost all of them are WebSocket connections (/ws/lobby): page loads and reconnects.
+const CONNECTIONS_QUERY = `query ($account: String!, $since: Date!) { viewer { accounts(filter: { accountTag: $account }) {
+  workersInvocationsAdaptive(limit: 100, filter: { scriptName: "lofi-lobby", date_geq: $since }, orderBy: [date_ASC]) {
+    sum { requests } dimensions { date } } } } }`;
+
 export class Room {
   constructor(state, env) {
     this.state = state;
@@ -135,11 +147,52 @@ export class Room {
       out[key] = r.ok ? (await r.json()).data : [];
       if (!r.ok) out.errors = [...(out.errors || []), key + ": " + (await r.text()).slice(0, 200)];
     }));
+    try { out.connections = await this.connections(); } catch (e) { out.connections = []; (out.errors ||= []).push("connections: " + e.message); }
+    out.archive = [...(await this.state.storage.list({ prefix: "day:" }))].map(([k, v]) => ({ day: k.slice(4), ...v }));
     return Response.json(out, { headers: { "Cache-Control": "no-store" } });
   }
 
+  async sql(query) {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
+      method: "POST", headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}` }, body: query,
+    });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+    return (await r.json()).data;
+  }
+
+  async connections() {
+    const since = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+    const r = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: CONNECTIONS_QUERY, variables: { account: this.env.CF_ACCOUNT_ID, since } }),
+    });
+    const body = await r.json();
+    if (body.errors?.length) throw new Error(body.errors[0].message.slice(0, 200));
+    return body.data.viewer.accounts[0].workersInvocationsAdaptive.map((x) => ({ day: x.dimensions.date, requests: x.sum.requests }));
+  }
+
+  // daily cron: keep every finished day (of the last 80) in storage, forever
+  async archive() {
+    if (!this.env.CF_ACCOUNT_ID || !this.env.CF_API_TOKEN) return;
+    for (let i = 80; i >= 1; i--) {
+      const day = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
+      if (await this.state.storage.get("day:" + day)) continue;
+      const rows = await this.sql(dayQuery(day));
+      if (!rows.length) continue;
+      const by = Object.fromEntries(rows.map((r) => [r.event, r]));
+      const joins = Number(by.join?.n || 0), leaves = Number(by.leave?.n || 0);
+      await this.state.storage.put("day:" + day, {
+        joins, visitors: Number(by.join?.visitors || 0), peak: Number(by.join?.peak || 0),
+        avgSeconds: leaves ? Number(by.leave.seconds) / leaves : 0, messages: Number(by.chat?.n || 0),
+      });
+    }
+  }
+
   async fetch(req) {
-    if (new URL(req.url).pathname === "/api/stats") return this.stats(req);
+    const path = new URL(req.url).pathname;
+    if (path === "/api/stats") return this.stats(req);
+    if (path === "/internal/archive") { await this.archive(); return new Response("ok"); }
     if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
     if (this.state.getWebSockets().length >= MAX_PLAYERS) return new Response("room is full", { status: 503 });
     const ip = req.headers.get("CF-Connecting-IP") || "local";
@@ -408,6 +461,10 @@ export class Room {
 }
 
 export default {
+  // once a day: archive yesterday's numbers in the room's storage (see Room.archive)
+  async scheduled(event, env) {
+    await env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch("https://room/internal/archive");
+  },
   async fetch(req, env) {
     const url = new URL(req.url);
     // stats: the room's Durable Object checks the admin password (same lockout as the game)

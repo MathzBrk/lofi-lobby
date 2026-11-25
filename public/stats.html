@@ -59,7 +59,8 @@
     <div class="card kpi"><small>chat messages · 7 days</small><b id="k-chat">–</b></div>
   </section>
   <section class="grid">
-    <div class="card wide"><h2><i>■ visitors</i> and <em>● peak online</em> per day · 30 days</h2><div id="c-daily"></div></div>
+    <div class="card wide"><h2><i>■ visitors</i> and <em>● peak online</em> per day · <span id="span">30 days</span></h2><div id="c-daily"></div></div>
+    <div class="card wide"><h2>connections per day, measured by Cloudflare since launch (page loads and reconnects, not unique people)</h2><div id="c-conn"></div></div>
     <div class="card"><h2>joins by hour of the day (UTC) · 30 days</h2><div id="c-hours"></div></div>
     <div class="card"><h2>countries · 30 days</h2><div class="rows" id="c-countries"></div></div>
     <div class="card"><h2>avg minutes in the room per day</h2><div id="c-time"></div></div>
@@ -73,11 +74,12 @@
   const n = (v) => Math.round(Number(v) || 0);
   const dayKey = (d) => String(d).slice(0, 10);
 
-  // the last 30 days, with zeros where nothing happened
+  // every day since the oldest one we know of (at least 30), with zeros where nothing happened
+  let SPAN = 30;
   function days30(rows, field) {
     const map = new Map(rows.map((r) => [dayKey(r.day), Number(r[field]) || 0]));
     const out = [];
-    for (let i = 29; i >= 0; i--) {
+    for (let i = SPAN - 1; i >= 0; i--) {
       const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
       out.push({ label: d.slice(5), value: map.get(d) || 0 });
     }
@@ -121,6 +123,19 @@
   }
 
   function draw(s) {
+    // archived days (kept forever) under the live 3 months; live wins where both exist
+    const merge = (live) => {
+      const m = new Map((s.archive || []).map((a) => [a.day, a]));
+      for (const r of live) m.set(dayKey(r.day), r);
+      return [...m.values()];
+    };
+    s.daily = merge(s.daily);
+    s.sessions = merge(s.sessions);
+    s.chat = merge(s.chat);
+    const oldest = [...(s.archive || []), ...(s.connections || [])].map((r) => dayKey(r.day)).sort()[0];
+    SPAN = Math.max(30, oldest ? Math.ceil((Date.now() - Date.parse(oldest)) / 864e5) + 1 : 30);
+    $("#span").textContent = SPAN + " days";
+    bars("#c-conn", days30(s.connections || [], "requests"));
     const visitors = days30(s.daily, "visitors");
     const peak = days30(s.daily, "peak");
     const chat = days30(s.chat, "messages");
