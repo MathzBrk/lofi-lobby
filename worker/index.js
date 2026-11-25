@@ -25,6 +25,13 @@
 //  - all text is stripped of control characters and truncated; numbers finite and clamped
 //  - word filter: bad names refused, bad chat words become *** (worker/moderation.js)
 //  - admin kick (short IP ban) and ban (long IP ban), kept in storage
+//
+// Stats (Workers Analytics Engine, dataset "lofi_lobby"): one data point per join, leave and chat.
+// No IP, name or chat text is stored: a visitor is a hash of IP + day, only good for counting uniques.
+//   blob1 event ("join"|"leave"|"chat"), blob2 gender, blob3 country, blob4 visitor
+//   double1 players online, double2 seconds in the room (leave)
+// /api/stats (admin password in the Authorization header) reads them back through the SQL API
+// (CF_ACCOUNT_ID and CF_API_TOKEN secrets) for public/stats.html.
 
 const MAX_PLAYERS = 100;
 // v1 has a single room; any other name is refused so nobody can spin up extra rooms (and extra cost)
@@ -74,6 +81,28 @@ function equal(a, b) {
   return diff === 0;
 }
 
+async function visitorOf(ip) {
+  const day = new Date().toISOString().slice(0, 10);
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip + "|" + day));
+  return [...new Uint8Array(hash).slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// last 30 days, answered by the Analytics Engine SQL API
+const STATS_QUERIES = {
+  daily: `SELECT toStartOfDay(timestamp) AS day, SUM(_sample_interval) AS joins, COUNT(DISTINCT blob4) AS visitors, MAX(double1) AS peak
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY day ORDER BY day`,
+  sessions: `SELECT toStartOfDay(timestamp) AS day, SUM(_sample_interval * double2) / SUM(_sample_interval) AS avgSeconds
+          FROM lofi_lobby WHERE blob1 = 'leave' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY day ORDER BY day`,
+  chat: `SELECT toStartOfDay(timestamp) AS day, SUM(_sample_interval) AS messages
+          FROM lofi_lobby WHERE blob1 = 'chat' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY day ORDER BY day`,
+  hours: `SELECT toHour(timestamp) AS hour, SUM(_sample_interval) AS joins
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY hour ORDER BY hour`,
+  countries: `SELECT blob3 AS country, COUNT(DISTINCT blob4) AS visitors
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY country ORDER BY visitors DESC LIMIT 12`,
+  genders: `SELECT blob2 AS gender, SUM(_sample_interval) AS joins
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY gender`,
+};
+
 export class Room {
   constructor(state, env) {
     this.state = state;
@@ -82,7 +111,35 @@ export class Room {
     this.spam = new Map(); // ip -> { strikes, mutedUntil, lastStrike, lastText, lastAt }
   }
 
+  stat(event, p, extra = []) {
+    try {
+      this.env.STATS?.writeDataPoint({
+        indexes: [event],
+        blobs: [event, p.gender || "", p.country || "", p.visitor || ""],
+        doubles: [this.state.getWebSockets().length, ...extra],
+      });
+    } catch {}
+  }
+
+  async stats(req) {
+    const ip = req.headers.get("CF-Connecting-IP") || "local";
+    const password = (req.headers.get("Authorization") || "").replace(/^Bearer /, "");
+    const check = await this.checkAdmin(ip, password);
+    if (!check.ok) return Response.json({ error: check.msg }, { status: 401 });
+    if (!this.env.CF_ACCOUNT_ID || !this.env.CF_API_TOKEN) return Response.json({ error: "stats not set up" }, { status: 501 });
+    const out = { online: this.state.getWebSockets().length };
+    await Promise.all(Object.entries(STATS_QUERIES).map(async ([key, sql]) => {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
+        method: "POST", headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}` }, body: sql,
+      });
+      out[key] = r.ok ? (await r.json()).data : [];
+      if (!r.ok) out.errors = [...(out.errors || []), key + ": " + (await r.text()).slice(0, 200)];
+    }));
+    return Response.json(out, { headers: { "Cache-Control": "no-store" } });
+  }
+
   async fetch(req) {
+    if (new URL(req.url).pathname === "/api/stats") return this.stats(req);
     if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
     if (this.state.getWebSockets().length >= MAX_PLAYERS) return new Response("room is full", { status: 503 });
     const ip = req.headers.get("CF-Connecting-IP") || "local";
@@ -96,7 +153,8 @@ export class Room {
     // hibernation: the DO can sleep with connections open; each player's
     // state lives on its own socket (serializeAttachment)
     this.state.acceptWebSocket(server);
-    server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, ip });
+    server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, ip,
+      country: String(req.cf?.country || "").slice(0, 2), visitor: await visitorOf(ip) });
     server.send(JSON.stringify({ t: "you", id }));
     const radio = await this.state.storage.get("radio");
     if (radio) server.send(JSON.stringify({ t: "radio", command: radio }));
@@ -156,7 +214,10 @@ export class Room {
       p.x = number(m.x);
       p.z = number(m.z);
       p.dir = DIRS.includes(m.dir) ? m.dir : "down";
+      const first = !p.joinedAt;
+      if (first) p.joinedAt = Date.now();
       ws.serializeAttachment(p);
+      if (first) this.stat("join", p);
       this.broadcast({ t: "joined", player: this.public(p) }, ws);
       await this.rememberName(p);
     } else if (m.t === "gender") {
@@ -212,6 +273,7 @@ export class Room {
       s.lastAt = now;
       const msg = { id: p.id, name: p.name, text, at: now, ...(p.admin && { admin: true }) };
       this.broadcast({ t: "chat", ...msg });
+      this.stat("chat", p);
       await this.saveHistory([...(await this.history()), msg]);
     }
   }
@@ -229,23 +291,24 @@ export class Room {
 
   // failures counted per IP in storage, so reconnecting doesn't reset them
   async isAdmin(ws, p, password) {
+    const check = await this.checkAdmin(p.ip, password);
+    if (!check.ok) ws.send(JSON.stringify({ t: "error", msg: check.msg }));
+    return check.ok;
+  }
+  async checkAdmin(ip, password) {
     // bump the "v3" prefix to drop every stored lock
-    const lockKey = "admin-fail-v3:" + p.ip;
+    const lockKey = "admin-fail-v3:" + ip;
     const lock = (await this.state.storage.get(lockKey)) || { fails: 0, until: 0 };
-    if (lock.until > Date.now()) {
-      ws.send(JSON.stringify({ t: "error", msg: "admin locked, try later" }));
-      return false;
-    }
+    if (lock.until > Date.now()) return { ok: false, msg: "admin locked, try later" };
     if (!this.env.ADMIN_PASSWORD || typeof password !== "string" || !equal(password, this.env.ADMIN_PASSWORD)) {
       lock.fails = lock.until ? 1 : lock.fails + 1; // a finished lock starts over
       lock.until = lock.fails >= ADMIN_ATTEMPTS ? Date.now() + ADMIN_LOCK_MS : 0;
       if (lock.until) lock.fails = 0;
       await this.state.storage.put(lockKey, lock);
-      ws.send(JSON.stringify({ t: "error", msg: "invalid admin password" }));
-      return false;
+      return { ok: false, msg: "invalid admin password" };
     }
     await this.state.storage.delete(lockKey);
-    return true;
+    return { ok: true };
   }
 
   // kick / ban a player by id: everyone on that player's IP loses the room
@@ -338,6 +401,7 @@ export class Room {
   leave(ws) {
     const p = ws.deserializeAttachment();
     if (!p) return;
+    if (p.joinedAt) this.stat("leave", p, [Math.round((Date.now() - p.joinedAt) / 1000)]);
     for (const k of this.buckets.keys()) if (k.startsWith(p.id + "|")) this.buckets.delete(k);
     this.broadcast({ t: "left", id: p.id }, ws);
   }
@@ -346,6 +410,11 @@ export class Room {
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
+    // stats: the room's Durable Object checks the admin password (same lockout as the game)
+    if (url.pathname === "/api/stats") {
+      if (req.method !== "GET") return new Response("method not allowed", { status: 405 });
+      return env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch(req);
+    }
     // /ws/<room>  ->  that room's Durable Object. Everything else is the static site (assets).
     const m = url.pathname.match(/^\/ws\/([a-z0-9-]{1,32})$/i);
     if (!m) return env.ASSETS ? env.ASSETS.fetch(req) : new Response("lofi-lobby", { status: 404 });

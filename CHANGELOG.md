@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Stats** for the admin at `/stats.html`: online now, visitors per day, peak online, time in the room, busiest hours, countries and chat volume (Workers Analytics Engine; no IP, name or chat text is stored). `scripts/stats-token.sh` gives it read access.
 - Cleaner HUD: the top card buttons are icons with an instant label on hover and their key in the corner, the shortcut bar became a "?" list (shown once on the first visit), the player count reads "N online", the radio TV is smaller, and respawn asks for a second click.
 - **Full screen**: a button in the top card (and the F key) enters or leaves full screen, handy for leaving the lobby open next to your work. Only for you; hidden where the browser doesn't support it.
 - **Respawn** button in the top card: sends your trainer back to the spawn if you got stuck.
