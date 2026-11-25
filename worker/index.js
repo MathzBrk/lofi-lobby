@@ -109,11 +109,14 @@ const dayQuery = (day) => `SELECT blob1 AS event, SUM(_sample_interval) AS n, CO
   FROM lofi_lobby WHERE timestamp >= toDateTime('${day} 00:00:00') AND timestamp < toDateTime('${day} 00:00:00') + INTERVAL '1' DAY
   GROUP BY event`;
 
-// Worker requests per day, measured by Cloudflare since launch (the API allows about 31 days back). With assets served
-// before the Worker, almost all of them are WebSocket connections (/ws/lobby): page loads and reconnects.
+// Measured by Cloudflare since launch (the API allows about 31 days back): Worker requests per day (with assets
+// served before the Worker, almost all are WebSocket connections: page loads and reconnects) and the most
+// WebSockets open at once on the Durable Object (peak online, from before the game logged its own stats).
 const CONNECTIONS_QUERY = `query ($account: String!, $since: Date!) { viewer { accounts(filter: { accountTag: $account }) {
   workersInvocationsAdaptive(limit: 100, filter: { scriptName: "lofi-lobby", date_geq: $since }, orderBy: [date_ASC]) {
-    sum { requests } dimensions { date } } } } }`;
+    sum { requests } dimensions { date } }
+  durableObjectsPeriodicGroups(limit: 100, filter: { date_geq: $since }, orderBy: [date_ASC]) {
+    max { activeWebsocketConnections } dimensions { date } } } } }`;
 
 export class Room {
   constructor(state, env) {
@@ -151,7 +154,7 @@ export class Room {
     // connections: archived days under the live ~31 days
     const live = new Set(out.connections.map((c) => c.day));
     out.archive = [...(await this.state.storage.list({ prefix: "day:" }))].map(([k, v]) => ({ day: k.slice(4), ...v }));
-    for (const a of out.archive) if (a.connections != null && !live.has(a.day)) out.connections.push({ day: a.day, requests: a.connections });
+    for (const a of out.archive) if (a.connections != null && !live.has(a.day)) out.connections.push({ day: a.day, requests: a.connections, peak: a.cfPeak || 0 });
     return Response.json(out, { headers: { "Cache-Control": "no-store" } });
   }
 
@@ -172,7 +175,15 @@ export class Room {
     });
     const body = await r.json();
     if (body.errors?.length) throw new Error(body.errors[0].message.slice(0, 200));
-    return body.data.viewer.accounts[0].workersInvocationsAdaptive.map((x) => ({ day: x.dimensions.date, requests: x.sum.requests }));
+    const acc = body.data.viewer.accounts[0];
+    const days = new Map();
+    for (const x of acc.workersInvocationsAdaptive) days.set(x.dimensions.date, { day: x.dimensions.date, requests: x.sum.requests, peak: 0 });
+    for (const x of acc.durableObjectsPeriodicGroups) {
+      const d = days.get(x.dimensions.date) || { day: x.dimensions.date, requests: 0, peak: 0 };
+      d.peak = Math.max(d.peak, x.max.activeWebsocketConnections);
+      days.set(d.day, d);
+    }
+    return [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
   }
 
   // daily cron: keep every finished day (of the last 80) in storage, forever
@@ -184,7 +195,7 @@ export class Room {
       if (c.day >= today) continue;
       const key = "day:" + c.day;
       const saved = (await this.state.storage.get(key)) || {};
-      if (saved.connections == null) await this.state.storage.put(key, { ...saved, connections: c.requests });
+      if (saved.connections == null) await this.state.storage.put(key, { ...saved, connections: c.requests, cfPeak: c.peak });
     }
     for (let i = 80; i >= 1; i--) {
       const day = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);

@@ -27,7 +27,11 @@
   h2 i { font-style: normal; color: var(--gold); } h2 em { font-style: normal; color: var(--blue); }
   svg { display: block; width: 100%; height: auto; font-family: Silkscreen, monospace; }
   svg text { fill: var(--muted); font-size: 9px; }
-  .bar { fill: var(--gold); } .bar:hover { fill: #ffe0a0; }
+  .bar { fill: var(--gold); }
+  .hit { fill: transparent; } .hit:hover { fill: rgba(255,255,255,.06); }
+  #tip { position: fixed; z-index: 9; display: none; flex-direction: column; gap: 3px; pointer-events: none; font-size: 11px;
+         padding: 8px 10px; border-radius: 6px; background: rgba(0,0,0,.92); border: 1px solid var(--line); color: var(--ink); }
+  #tip b { font-weight: 400; color: var(--muted); } #tip i { font-style: normal; color: var(--gold); } #tip em { font-style: normal; color: var(--blue); }
   .line { fill: none; stroke: var(--blue); stroke-width: 2; }
   .dot { fill: var(--blue); }
   .rows { display: flex; flex-direction: column; gap: 8px; font-size: 11px; }
@@ -54,7 +58,7 @@
     <div class="card kpi"><small>online now</small><b class="live" id="k-online">–</b></div>
     <div class="card kpi"><small>visitors today</small><b id="k-today">–</b></div>
     <div class="card kpi"><small>visitors · 7 days</small><b id="k-week">–</b></div>
-    <div class="card kpi"><small>peak online · 30 days</small><b id="k-peak">–</b></div>
+    <div class="card kpi"><small>peak online · ever</small><b id="k-peak">–</b></div>
     <div class="card kpi"><small>avg time in the room</small><b id="k-time">–</b></div>
     <div class="card kpi"><small>chat messages · 7 days</small><b id="k-chat">–</b></div>
   </section>
@@ -87,7 +91,10 @@
   }
 
   // bars (and an optional line on the same scale) as a small SVG
-  function bars(target, data, line, fmt = n) {
+  const tip = document.createElement("div");
+  tip.id = "tip";
+  document.body.append(tip);
+  function bars(target, data, line, fmt = n, names = ["value", "online"]) {
     const W = 640, H = 200, L = 30, B = 22, T = 10;
     const max = Math.max(1, ...data.map((d) => d.value), ...(line || []).map((d) => d.value));
     const y = (v) => H - B - (v / max) * (H - B - T);
@@ -99,15 +106,28 @@
     }
     data.forEach((d, i) => {
       const r = el("rect", { class: "bar", x: L + i * step + step * 0.15, y: y(d.value), width: step * 0.7, height: Math.max(0, H - B - y(d.value)), rx: 1 });
-      r.append(el("title", {}, `${d.label}: ${fmt(d.value)}`));
       svg.append(r);
       const every = Math.ceil(data.length / 10);
       if (i % every === 0) svg.append(el("text", { x: L + i * step + step / 2, y: H - 6, "text-anchor": "middle" }, d.label));
     });
     if (line) {
       svg.append(el("polyline", { class: "line", points: line.map((d, i) => `${L + i * step + step / 2},${y(d.value)}`).join(" ") }));
-      line.forEach((d, i) => { const c = el("circle", { class: "dot", cx: L + i * step + step / 2, cy: y(d.value), r: 2.5 }); c.append(el("title", {}, `${d.label}: ${fmt(d.value)} online`)); svg.append(c); });
+      line.forEach((d, i) => svg.append(el("circle", { class: "dot", cx: L + i * step + step / 2, cy: y(d.value), r: 2.5 })));
     }
+    // hover: a full-height column per point shows its values right away
+    data.forEach((d, i) => {
+      const hit = el("rect", { class: "hit", x: L + i * step, y: 0, width: step, height: H - B });
+      hit.addEventListener("pointermove", (e) => {
+        tip.innerHTML = `<b></b><span><i>■</i> ${names[0]}: ${fmt(d.value)}</span>` + (line ? `<span><em>●</em> ${names[1]}: ${fmt(line[i].value)}</span>` : "");
+        tip.firstChild.textContent = d.tip || d.label;
+        tip.style.display = "flex";
+        const w = tip.offsetWidth;
+        tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px";
+        tip.style.top = e.clientY + 14 + "px";
+      });
+      hit.addEventListener("pointerleave", () => (tip.style.display = "none"));
+      svg.append(hit);
+    });
     $(target).replaceChildren(svg);
   }
 
@@ -135,9 +155,11 @@
     const oldest = [...(s.archive || []), ...(s.connections || [])].map((r) => dayKey(r.day)).sort()[0];
     SPAN = Math.max(30, oldest ? Math.ceil((Date.now() - Date.parse(oldest)) / 864e5) + 1 : 30);
     $("#span").textContent = SPAN + " days";
-    bars("#c-conn", days30(s.connections || [], "requests"));
+    bars("#c-conn", days30(s.connections || [], "requests"), null, n, ["connections"]);
     const visitors = days30(s.daily, "visitors");
-    const peak = days30(s.daily, "peak");
+    // peak online: the game's own count, or Cloudflare's (most WebSockets open at once) for older days
+    const cfPeak = days30(s.connections || [], "peak");
+    const peak = days30(s.daily, "peak").map((d, i) => ({ ...d, value: Math.max(d.value, cfPeak[i].value) }));
     const chat = days30(s.chat, "messages");
     const time = days30(s.sessions, "avgSeconds").map((d) => ({ ...d, value: d.value / 60 }));
     $("#k-online").textContent = s.online;
@@ -149,10 +171,10 @@
     const avg = withTime.length ? withTime.reduce((a, r) => a + Number(r.avgSeconds), 0) / withTime.length : 0;
     $("#k-time").textContent = avg >= 60 ? Math.round(avg / 60) + " min" : Math.round(avg) + " s";
     $("#k-chat").textContent = chat.slice(-7).reduce((a, d) => a + d.value, 0);
-    bars("#c-daily", visitors, peak);
+    bars("#c-daily", visitors, peak, n, ["visitors", "peak online"]);
     const hours = new Map(s.hours.map((r) => [Number(r.hour), Number(r.joins)]));
-    bars("#c-hours", Array.from({ length: 24 }, (_, h) => ({ label: String(h).padStart(2, "0"), value: hours.get(h) || 0 })));
-    bars("#c-time", time, null, (v) => Math.round(v));
+    bars("#c-hours", Array.from({ length: 24 }, (_, h) => ({ label: String(h).padStart(2, "0"), tip: String(h).padStart(2, "0") + ":00 UTC", value: hours.get(h) || 0 })), null, n, ["joins"]);
+    bars("#c-time", time, null, (v) => Math.round(v), ["minutes"]);
     rows("#c-countries", s.countries.map((r) => ({ label: r.country || "??", value: Number(r.visitors) })));
     rows("#c-genders", s.genders.map((r) => ({ label: r.gender === "female" ? "♀" : "♂", value: Number(r.joins) })));
     $("#updated").textContent = "updated " + new Date().toLocaleTimeString();
