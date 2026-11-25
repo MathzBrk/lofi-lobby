@@ -3,7 +3,7 @@
 //   client -> server: { t: "hello", name, gender, x, z, dir } | { t: "pos", x, z, dir, step }
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
 //                     { t: "radio", idx, password }   (admin)
-//                     { t: "auth", password }   (admin login: answered with admin-ok or an error)
+//                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
 //                     { t: "who", id, password }   (admin: who is this player)
 //                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
 //   server -> client: { t: "you", id } | { t: "state", players: [...] }
@@ -14,6 +14,7 @@
 //                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
 //                     { t: "who", id, tag, names, sameTag } (admin only)
 //                     { t: "kicked", msg } (the server closes you; don't reconnect)
+//                     { t: "admin", id } (that player logged in as admin; players and chat also carry admin: true)
 //
 // Security (the client is public, so nothing coming from it is trusted):
 //  - max message size, per-connection rate limit, max players per room
@@ -49,7 +50,7 @@ const REPEAT_WINDOW_MS = 30_000; // ...inside this window counts as spam
 // rate buckets: capacity, refill per second
 const RATES = { pos: [30, 20], chat: [8, 1], other: [10, 1] };
 
-import { badName, cleanChat } from "./moderation.js";
+import { badName, cleanChat, normalize } from "./moderation.js";
 
 const DIRS = ["down", "up", "left", "right"];
 const cleanText = (s, max) =>
@@ -107,7 +108,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step };
+    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, admin: !!p.admin };
   }
   players() {
     return this.state.getWebSockets().map((ws) => ws.deserializeAttachment()).filter(Boolean).map((p) => this.public(p));
@@ -175,7 +176,12 @@ export class Room {
       ws.serializeAttachment(p);
       this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
     } else if (m.t === "auth") {
-      if (await this.isAdmin(ws, p, m.password)) ws.send(JSON.stringify({ t: "admin-ok" }));
+      if (!(await this.isAdmin(ws, p, m.password))) return;
+      // everyone sees who the admin is (badge over the name, colour in the chat)
+      p.admin = true;
+      ws.serializeAttachment(p);
+      this.broadcast({ t: "admin", id: p.id });
+      if (!m.quiet) ws.send(JSON.stringify({ t: "admin-ok" }));
     } else if (m.t === "who") {
       if (!(await this.isAdmin(ws, p, m.password))) return;
       const all = this.state.getWebSockets().map((w) => w.deserializeAttachment()).filter(Boolean);
@@ -204,7 +210,7 @@ export class Room {
       if (s.repeats > REPEAT_LIMIT) return this.strike(ws, p.ip);
       s.lastText = text;
       s.lastAt = now;
-      const msg = { id: p.id, name: p.name, text, at: now };
+      const msg = { id: p.id, name: p.name, text, at: now, ...(p.admin && { admin: true }) };
       this.broadcast({ t: "chat", ...msg });
       await this.saveHistory([...(await this.history()), msg]);
     }
@@ -213,7 +219,9 @@ export class Room {
   // a refused name becomes a random trainer name, and the player is told so it shows the same
   nameFor(ws, raw) {
     const name = cleanText(raw, 16) || "trainer";
-    if (!badName(name)) return name;
+    // nobody can pose as staff by name: the real admin is shown by the badge
+    const staff = /admin|moderador|moderator|staff/.test(normalize(name));
+    if (!badName(name) && !staff) return name;
     const fallback = "trainer" + Math.floor(Math.random() * 900 + 100);
     try { ws.send(JSON.stringify({ t: "rename", name: fallback, msg: "that name is not allowed" })); } catch {}
     return fallback;

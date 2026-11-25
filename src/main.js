@@ -1451,6 +1451,7 @@ function createOther(p) {
     dir: p.dir || "down",
     step: p.step || 0,
     name: p.name,
+    admin: !!p.admin,
   };
   mesh.position.copy(o.target);
   others.set(p.id, o);
@@ -1471,24 +1472,30 @@ function updateCount() {
     el.textContent = `room ${ROOM} · ${others.size + 1} trainer${others.size ? "s" : ""}`;
 }
 
+let meAdmin = false; // the server confirmed this connection is the admin
 let pendingPassword = ""; // typed after /admin, saved only if the server accepts it
 let kicked = false; // kicked or banned: stay out instead of reconnecting
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/${ROOM}`);
-  ws.onopen = () =>
+  ws.onopen = () => {
     ws.send(JSON.stringify({ t: "hello", name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
+    // a saved admin logs in again quietly, so everyone sees the admin badge
+    let password = "";
+    try { password = localStorage.getItem("admin-password") || ""; } catch {}
+    if (password) ws.send(JSON.stringify({ t: "auth", password, quiet: true }));
+  };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
     if (m.t === "you") myId = m.id;
     else if (m.t === "state") m.players.forEach(createOther);
     else if (m.t === "joined") createOther(m.player);
     else if (m.t === "left") removeOther(m.id);
-    else if (m.t === "chat") receiveChat(m.id, m.name, m.text);
+    else if (m.t === "chat") receiveChat(m.id, m.name, m.text, m.admin);
     else if (m.t === "history") {
       // what was said before we arrived (also on reconnect, so start clean)
       elMsgs.replaceChildren();
-      m.messages.forEach((c) => addToHistory(c.name, c.text, c.id));
+      m.messages.forEach((c) => addToHistory(c.name, c.text, c.id, c.admin));
       elMsgs.scrollTop = elMsgs.scrollHeight;
     }
     else if (m.t === "radio") receiveCommand(m.command);
@@ -1501,6 +1508,11 @@ function connect() {
       try { localStorage.setItem("name", NAME); } catch {}
       addToHistory("system", m.msg);
     } else if (m.t === "who") showWho(m);
+    else if (m.t === "admin") {
+      if (m.id === myId) meAdmin = true;
+      const o = others.get(m.id);
+      if (o) o.admin = true;
+    }
     else if (m.t === "admin-ok") {
       // the server accepted the password typed after /admin: keep it and reload to show the controls
       try { localStorage.setItem("admin-password", pendingPassword); } catch {}
@@ -1525,6 +1537,7 @@ function connect() {
           step: o.step,
           name: o.name,
           gender: m.gender,
+          admin: o.admin,
         };
         removeOther(m.id);
         createOther(p);
@@ -1589,9 +1602,9 @@ const bubbles = new Map(); // owner (mesh) -> { el, until }
 // any text field (chat or the admin login): game keys and the Enter shortcut stay out of it
 const typing = () => ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
 
-function addToHistory(name, text, id) {
+function addToHistory(name, text, id, admin) {
   const d = document.createElement("div");
-  d.className = "m";
+  d.className = admin ? "m admin" : "m";
   const s = document.createElement("small");
   s.textContent = name;
   if (IS_ADMIN && id && id !== myId && id !== "me") {
@@ -1669,22 +1682,27 @@ function showWho(m) {
 
 // ---- Name above each trainer ----
 const nameTags = new Map(); // mesh -> div
-function nameTag(mesh, name, id) {
+function nameTag(mesh, name, id, admin) {
   let el = nameTags.get(mesh);
   if (!el) {
     el = Object.assign(document.createElement("div"), { className: "tag" });
+    el.append(
+      Object.assign(document.createElement("b"), { className: "badge", textContent: "admin" }),
+      Object.assign(document.createElement("span"), { className: "who" }),
+    );
     if (IS_ADMIN && id) {
       el.classList.add("mod");
-      el.addEventListener("click", (e) => openModMenu(e, id, el.textContent));
+      el.addEventListener("click", (e) => openModMenu(e, id, el.lastChild.textContent));
     }
     document.body.append(el);
     nameTags.set(mesh, el);
   }
-  if (el.textContent !== name) el.textContent = name;
+  if (el.lastChild.textContent !== name) el.lastChild.textContent = name;
+  el.classList.toggle("admin", !!admin);
 }
 function updateNameTags() {
-  nameTag(sprite, NAME);
-  for (const [id, o] of others) nameTag(o.mesh, o.name || "trainer", id);
+  nameTag(sprite, NAME, null, meAdmin);
+  for (const [id, o] of others) nameTag(o.mesh, o.name || "trainer", id, o.admin);
   for (const [mesh, el] of nameTags) {
     if (!mesh.parent) { el.remove(); nameTags.delete(mesh); continue; }
     const baseY = mesh === sprite ? pos.y : mesh.position.y;
@@ -1720,8 +1738,8 @@ function updateBubbles() {
   }
 }
 
-function receiveChat(id, name, text) {
-  addToHistory(name, text, id);
+function receiveChat(id, name, text, admin) {
+  addToHistory(name, text, id, admin);
   const owner = id === myId || id === "me" ? sprite : others.get(id)?.mesh;
   if (owner) showBubble(owner, text);
 }

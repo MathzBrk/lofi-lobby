@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Everyone sees who the admin is: an **ADMIN** badge over the name and a highlighted line in the chat. Names with "admin", "moderador", "moderator" or "staff" are refused so nobody can pose as one.
 - **Rain**: a button in the top card (and the R key) turns on rain with a short fade: thin drops that stop on roofs, splash rings on the ground and the pond, shiny wet ground and a little fog; by day the sky also turns grey. Only for you, and remembered.
 - The HUD panels are more opaque with lighter grey text, and the shortcut bar sits between the radio and the chat instead of over the radio.
 - Admin menu shows who a player is: a short tag of their IP (never the IP), who else is online with it, and the names it used in the last 6 hours.
