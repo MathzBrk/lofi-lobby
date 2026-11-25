@@ -109,7 +109,7 @@ const dayQuery = (day) => `SELECT blob1 AS event, SUM(_sample_interval) AS n, CO
   FROM lofi_lobby WHERE timestamp >= toDateTime('${day} 00:00:00') AND timestamp < toDateTime('${day} 00:00:00') + INTERVAL '1' DAY
   GROUP BY event`;
 
-// Worker requests per day, measured by Cloudflare since launch (about 30 days back). With assets served
+// Worker requests per day, measured by Cloudflare since launch (the API allows about 31 days back). With assets served
 // before the Worker, almost all of them are WebSocket connections (/ws/lobby): page loads and reconnects.
 const CONNECTIONS_QUERY = `query ($account: String!, $since: Date!) { viewer { accounts(filter: { accountTag: $account }) {
   workersInvocationsAdaptive(limit: 100, filter: { scriptName: "lofi-lobby", date_geq: $since }, orderBy: [date_ASC]) {
@@ -161,7 +161,7 @@ export class Room {
   }
 
   async connections() {
-    const since = new Date(Date.now() - 60 * 864e5).toISOString().slice(0, 10);
+    const since = new Date(Date.now() - 31 * 864e5).toISOString().slice(0, 10);
     const r = await fetch("https://api.cloudflare.com/client/v4/graphql", {
       method: "POST",
       headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}`, "Content-Type": "application/json" },
