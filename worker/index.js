@@ -32,6 +32,7 @@
 //   POST /api/notes { name, gender, text, color, key }  one per NOTE_EVERY_MS per IP, banned IPs refused,
 //                                                  same cleaning and word filter as names and chat, no links
 //   PATCH /api/notes/<id> { text, color, key }  the writer edits their note
+//   POST /api/notes/<id>/claim  the admin takes a note nobody owns (written before wall keys existed)
 //   DELETE /api/notes/<id>  the writer (X-Wall-Key header) or the admin (password in the Authorization header)
 // A note belongs to whoever holds its "wall key" (random, kept in the writer's browser; the note stores its hash).
 // New, edited and deleted notes also go out on the WebSocket:
@@ -106,7 +107,9 @@ async function ownerOf(key) {
   return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 // a note as the browser sees it: never the owner hash, only "mine" for the one asking
-const shown = (id, { owner, ...note }, asking) => ({ id, ...note, ...(asking && owner === asking && { mine: true }) });
+// (and "open" for a note nobody owns, from before wall keys: the admin can claim those)
+const shown = (id, { owner, ...note }, asking) =>
+  ({ id, ...note, ...(asking && owner === asking && { mine: true }), ...(!owner && { open: true }) });
 const number = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, n)) : 0;
@@ -264,6 +267,20 @@ export class Room {
       await this.state.storage.put(del[1], edited);
       this.broadcast({ t: "note-edit", note: shown(del[1], edited) });
       return json({ note: shown(del[1], edited, owner) });
+    }
+    // Notes from before wall keys existed belong to nobody. The admin can take one (it becomes theirs to edit):
+    // the only way left to tell whose it was is to ask, and the admin is who gets asked.
+    const claim = url.pathname.replace("%3A", ":").match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})\/claim$/);
+    if (req.method === "POST" && claim) {
+      const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
+      if (!check.ok) return json({ error: check.msg }, 401);
+      const owner = await ownerOf(req.headers.get("X-Wall-Key"));
+      const note = await this.state.storage.get(claim[1]);
+      if (!note) return json({ error: "this note is gone" }, 404);
+      if (!owner) return json({ error: "bad request" }, 400);
+      if (note.owner) return json({ error: "this note already has an owner" }, 409);
+      await this.state.storage.put(claim[1], { ...note, owner });
+      return json({ note: shown(claim[1], { ...note, owner }, owner) });
     }
     if (req.method === "DELETE" && del) {
       // the writer (their wall key) or the admin (password, same lockout as everywhere)

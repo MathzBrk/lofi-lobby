@@ -245,6 +245,8 @@ export function setupWall({ getName, getGender, isAdmin }) {
         acts.append(b);
       };
       if (n.mine) act("edit", () => openCompose(n));
+      // a note from before notes had owners: the admin can take it, and then edit it
+      else if (n.open) act("claim", () => claim(n));
       act("delete", () => askDelete(n));
       el.classList.toggle("mine", !!n.mine);
       el.append(acts);
@@ -347,6 +349,16 @@ export function setupWall({ getName, getGender, isAdmin }) {
     box.classList.remove("busy");
   });
 
+  async function claim(n) {
+    let password = "";
+    try { password = localStorage.getItem("admin-password") || ""; } catch {}
+    const r = await fetch(`/api/notes/${n.id}/claim`, { method: "POST", headers: { Authorization: "Bearer " + password, "X-Wall-Key": wallKey(true) } });
+    const body = await r.json().catch(() => ({}));
+    if (r.ok) return onNoteEdited(body.note);
+    const el = cards.get(n.id)?.querySelector(".acts button");
+    if (el) el.textContent = body.error || "could not claim";
+  }
+
   // the composer writes a new note, or edits one of yours
   function openCompose(n) {
     editing = n ? n.id : null;
@@ -425,7 +437,7 @@ export function setupWall({ getName, getGender, isAdmin }) {
   function onNoteEdited(n) {
     const old = notes.get(n.id);
     if (!old) return; // not loaded here yet: it will come edited when it loads
-    notes.set(n.id, { ...n, mine: n.mine || old.mine });
+    notes.set(n.id, { ...n, mine: n.mine || (old.mine && !n.open) });
     if (open) place(notes.get(n.id));
     status();
   }
