@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Mentions in the chat**: type **@** and pick a name from the list of players in the room (arrows, Tab or Enter). Everyone sees the message as usual, but for the player it names it is highlighted: a gold bar and tint in the chat and a gold-edged bubble over the sender. The @name is shown in that player's name colour for everyone. Names are matched without telling upper from lower case and only as a whole name ("@Ana" doesn't mention "Anabel").
 - A small GitHub link beside the chat: the game is open source, come and contribute.
 - **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
 - **Trainer and cap in the top card**: a male/female switch and, beside it, the cap you wear (drawn as a little cap, so it is not taken for the name colour's dot). Click the cap to see the other colours; picking one folds them away.

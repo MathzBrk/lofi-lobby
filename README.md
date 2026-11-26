@@ -35,6 +35,7 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | M or the speaker button | mute the radio for you |
 | Phone: drag anywhere | walk (push to the edge of the ring to run); **chat** button opens the chat |
 | Enter | open the chat; it stays open after sending · Esc or Enter on an empty box goes back to walking |
+| @ in the chat | mention someone in the room (Tab or Enter picks the name); everyone reads it, but it is highlighted for them |
 | G | switch trainer |
 | N or the day/night button | switch between day and night for you |
 | R or the rain button | turn the rain on or off for you (greyer sky by day) |
