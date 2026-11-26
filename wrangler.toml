@@ -28,6 +28,10 @@ crons = ["15 0 * * *"]
 binding = "STATS"
 dataset = "lofi_lobby"
 
+# which deploy is running: sent to each client, so open tabs reload themselves after a new deploy
+[version_metadata]
+binding = "VERSION"
+
 # ALLOWED_ORIGINS (optional): extra origins allowed on the WebSocket, comma-separated.
 # ADMIN_PASSWORD: secret -> `npx wrangler secret put ADMIN_PASSWORD` (never here)
 # CF_ACCOUNT_ID, CF_API_TOKEN (Account Analytics: Read): secrets for /stats, set with `npx wrangler secret put`

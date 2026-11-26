@@ -7,7 +7,7 @@
 //                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
 //                     { t: "who", id, password }   (admin: who is this player)
 //                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
-//   server -> client: { t: "you", id } | { t: "state", players: [...] }
+//   server -> client: { t: "you", id, v } | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, text, at } | { t: "name", id, name }
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
@@ -387,7 +387,8 @@ export class Room {
     this.state.acceptWebSocket(server);
     server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, seat: -1, ip,
       country: String(req.cf?.country || "").slice(0, 2), visitor: await visitorOf(ip) });
-    server.send(JSON.stringify({ t: "you", id }));
+    // v: the deploy that is running. A tab that reconnects and sees another one reloads itself.
+    server.send(JSON.stringify({ t: "you", id, v: this.env.VERSION?.id || "" }));
     const radio = await this.state.storage.get("radio");
     if (radio) server.send(JSON.stringify({ t: "radio", command: radio }));
     const messages = await this.history();
@@ -444,6 +445,10 @@ export class Room {
     }
 
     if (m.t === "hello") {
+      // A tab opened before the self-reload existed doesn't know `v`. The only thing that makes it
+      // reload is the answer to an admin login, so it gets that once and comes back as a new tab.
+      // (It only clears a password saved in that tab; no admin right is given.)
+      if (m.v !== 1) return void ws.send(JSON.stringify({ t: "admin-ok" }));
       p.name = this.nameFor(ws, m.name);
       p.gender = gender(m.gender);
       // where the player already is (a reconnect, or a saved spot), so others see them there at once

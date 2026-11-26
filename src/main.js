@@ -1888,13 +1888,14 @@ function updateCount() {
 }
 
 let meAdmin = false; // the server confirmed this connection is the admin
+let deployed = ""; // the deploy this tab first connected to
 let pendingPassword = ""; // typed after /admin, saved only if the server accepts it
 let kicked = false; // kicked or banned: stay out instead of reconnecting
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/${ROOM}`);
   ws.onopen = () => {
-    ws.send(JSON.stringify({ t: "hello", name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
+    ws.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
     if (myHold) sendHold();
     // a saved admin logs in again quietly, so everyone sees the admin badge
@@ -1904,7 +1905,17 @@ function connect() {
   };
   ws.onmessage = (ev) => {
     const m = JSON.parse(ev.data);
-    if (m.t === "you") myId = m.id;
+    if (m.t === "you") {
+      myId = m.id;
+      // the room reconnected us to a newer deploy than the one this tab loaded with: reload to get
+      // it, but not in the middle of something being written
+      if (deployed && m.v && m.v !== deployed) {
+        const busy = () => wall.isOpen() || elInput.value || document.activeElement?.id === "name-input";
+        const go = () => (busy() ? setTimeout(go, 2000) : location.reload());
+        go();
+      }
+      deployed ||= m.v;
+    }
     else if (m.t === "state") m.players.forEach(createOther);
     else if (m.t === "joined") createOther(m.player);
     else if (m.t === "left") removeOther(m.id);
