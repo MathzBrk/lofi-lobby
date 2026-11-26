@@ -19,6 +19,7 @@ The client is public, so the server trusts nothing it sends.
 - **Chat history:** the room keeps the last 30 messages from the last 2 hours (name, text, time; never the IP) so people who just joined can read them. Messages are filtered before they are stored, and a banned player's messages are removed.
 
 - **Message wall:** notes are kept forever (name, trainer, text, colour, time; never the IP). Writing is only accepted from the site's own origin, with a body of at most 12 KB; the text is cut to 2,000 characters and 40 lines and goes through the same cleaning and word filter as the chat, the name through the same filter as names. Notes with a link are refused (a scheme, `www.`, a domain, or `name.xx/path`). Notes with a link are refused (a scheme, `www.`, a domain, or `name.xx/path`). One note per minute per IP (the time of an IP's last note is kept for that and removed by the daily cron); banned IPs can't write. The admin deletes a note with the admin password, under the same lockout.
+- **Whose note it is:** there are no accounts, so the browser keeps a random "wall key" and sends it with each note. The note stores only the key's SHA-256, which is never sent to anyone; showing the key again is what allows editing (same cleaning, filter and link rule; 5 s between edits) or deleting that note. Clearing the browser's data loses the key, and the note can then only be removed by the admin.
 
 A word list never catches everything; kick and ban cover the rest.
 

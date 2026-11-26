@@ -104,10 +104,27 @@ const ago = (at) => {
 };
 const newestFirst = (a, b) => (a.id < b.id ? 1 : -1);
 
+// The "wall key": a random secret kept in this browser. The server stores its hash with each note you
+// write, and showing it again is what lets you edit or delete that note (there are no accounts).
+function wallKey(create) {
+  try {
+    let k = localStorage.getItem("wall-key");
+    if (!k && create) {
+      k = [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("");
+      localStorage.setItem("wall-key", k);
+    }
+    return k || "";
+  } catch {
+    return "";
+  }
+}
+
 export function setupWall({ getName, getGender, isAdmin }) {
   const notes = new Map(); // id -> note
   const cards = new Map(); // id -> its paper on the cork
   let more = true, loading = false, open = false, color = "cream", total = 0, columns = [];
+  let editing = null; // id of the note being edited (the composer is reused), or null for a new one
+  let draft = { text: "", color }; // a new note half written, kept while you edit another
 
   const root = $("div");
   root.id = "wall";
@@ -137,7 +154,20 @@ export function setupWall({ getName, getGender, isAdmin }) {
         </div>
       </form>
     </div>
-    <div class="over" data-over="zoom" hidden></div>`;
+    <div class="over" data-over="zoom" hidden></div>
+    <div class="over" data-over="confirm" hidden>
+      <div class="ask paper">
+        <i class="pin"></i>
+        <p class="text">delete this note?</p>
+        <blockquote></blockquote>
+        <small>it comes off the wall for everyone and can't be brought back.</small>
+        <div class="row">
+          <small class="err"></small>
+          <button type="button" class="cancel">keep it</button>
+          <button type="button" class="danger">delete</button>
+        </div>
+      </div>
+    </div>`;
   document.body.append(root);
 
   const elCork = root.querySelector(".cork");
@@ -146,6 +176,7 @@ export function setupWall({ getName, getGender, isAdmin }) {
   const elEmpty = root.querySelector(".empty");
   const compose = root.querySelector("[data-over=compose]");
   const zoom = root.querySelector("[data-over=zoom]");
+  const confirm = root.querySelector("[data-over=confirm]");
   const form = compose.querySelector("form");
   const area = form.querySelector("textarea");
   const left = form.querySelector(".left");
@@ -156,15 +187,19 @@ export function setupWall({ getName, getGender, isAdmin }) {
     b.type = "button";
     b.style.background = hex;
     b.setAttribute("aria-label", name + " paper");
+    b.dataset.color = name;
     b.addEventListener("click", () => {
-      color = name;
-      colors.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
-      form.dataset.color = name;
+      setColor(name);
       area.focus({ preventScroll: true });
     });
     colors.append(b);
   }
-  form.dataset.color = color;
+  function setColor(name) {
+    color = COLORS[name] ? name : "cream";
+    colors.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x.dataset.color === color));
+    form.dataset.color = color;
+  }
+  setColor(color);
 
   const updateLeft = () => {
     const n = MAX - area.value.length;
@@ -178,12 +213,13 @@ export function setupWall({ getName, getGender, isAdmin }) {
     if (!open) return;
     e.stopPropagation();
     if (e.key === "Escape") {
-      if (!zoom.hidden) zoom.hidden = true;
-      else if (!compose.hidden) compose.hidden = true;
+      if (!confirm.hidden) confirm.hidden = true;
+      else if (!zoom.hidden) zoom.hidden = true;
+      else if (!compose.hidden) closeCompose();
       else close();
     } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !compose.hidden) form.requestSubmit();
     // the keys that open the wall also close it (not while writing: there they are letters)
-    else if (/^[eb]$/i.test(e.key) && compose.hidden && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) close();
+    else if (/^[eb]$/i.test(e.key) && compose.hidden && confirm.hidden && !e.repeat && !e.metaKey && !e.ctrlKey && !e.altKey) close();
   }, true);
 
   function card(n) {
@@ -194,29 +230,31 @@ export function setupWall({ getName, getGender, isAdmin }) {
     el.style.setProperty("--pin", PINS[h % 4]);
     const text = $("p", "text", n.text); // textContent: never HTML from a note
     const foot = $("footer");
-    const time = $("time", "", ago(n.at));
+    const time = $("time", "", ago(n.at) + (n.edited ? " · edited" : ""));
     time.dataset.at = n.at;
+    if (n.edited) time.title = "edited " + ago(n.edited);
     foot.append($("span", "who " + n.gender, n.name), time);
     el.append($("i", "pin"), text, foot);
-    if (isAdmin()) {
-      const del = $("button", "del", "✕");
-      del.type = "button";
-      del.setAttribute("aria-label", "delete note");
-      del.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (del.classList.contains("confirm")) return remove(n.id);
-        del.classList.add("confirm");
-        del.textContent = "delete?";
-        setTimeout(() => { del.classList.remove("confirm"); del.textContent = "✕"; }, 3000);
-      });
-      el.append(del);
+    // your own note: edit and delete. The admin can delete any note. Deleting always asks first
+    if (n.mine || isAdmin()) {
+      const acts = $("div", "acts");
+      const act = (label, fn) => {
+        const b = $("button", "", label);
+        b.type = "button";
+        b.addEventListener("click", (e) => { e.stopPropagation(); fn(); });
+        acts.append(b);
+      };
+      if (n.mine) act("edit", () => openCompose(n));
+      act("delete", () => askDelete(n));
+      el.classList.toggle("mine", !!n.mine);
+      el.append(acts);
     }
     // a long note is cut on the cork and opens whole on click
     el.addEventListener("click", () => {
       if (!el.classList.contains("long")) return;
       const big = el.cloneNode(true);
       big.classList.remove("long", "new");
-      big.querySelector(".del")?.remove();
+      big.querySelector(".acts")?.remove();
       zoom.replaceChildren(big);
       zoom.hidden = false;
     });
@@ -229,8 +267,10 @@ export function setupWall({ getName, getGender, isAdmin }) {
   const shortest = () => columns.reduce((a, b) => (b.offsetHeight < a.offsetHeight ? b : a));
   function place(n, where) {
     const el = card(n);
+    const old = cards.get(n.id);
     cards.set(n.id, el);
-    shortest()[where](el);
+    if (old?.isConnected) old.replaceWith(el); // an edited note stays where it was
+    else shortest()[where](el);
     el.classList.toggle("long", el.querySelector(".text").scrollHeight > el.querySelector(".text").clientHeight + 2);
     return el;
   }
@@ -254,7 +294,8 @@ export function setupWall({ getName, getGender, isAdmin }) {
     loading = true;
     try {
       const oldest = [...notes.keys()].sort()[0];
-      const r = await fetch("/api/notes" + (oldest ? "?before=" + encodeURIComponent(oldest) : ""));
+      const key = wallKey(); // tells the server which notes are yours
+      const r = await fetch("/api/notes" + (oldest ? "?before=" + encodeURIComponent(oldest) : ""), key ? { headers: { "X-Wall-Key": key } } : {});
       const body = await r.json();
       more = body.more;
       total = body.total;
@@ -276,11 +317,50 @@ export function setupWall({ getName, getGender, isAdmin }) {
   new IntersectionObserver((e) => e[0].isIntersecting && open && load(), { root: elCork, rootMargin: "300px" })
     .observe(root.querySelector(".more"));
 
-  async function remove(id) {
-    let password = "";
-    try { password = localStorage.getItem("admin-password") || ""; } catch {}
-    const r = await fetch("/api/notes/" + encodeURIComponent(id), { method: "DELETE", headers: { Authorization: "Bearer " + password } });
-    if (r.ok) onNoteDeleted(id);
+  // deleting asks first, on a note of its own
+  let deleting = null;
+  function askDelete(n) {
+    deleting = n;
+    confirm.querySelector("blockquote").textContent = n.text.length > 140 ? n.text.slice(0, 140) + "…" : n.text;
+    confirm.querySelector(".ask").dataset.color = n.color;
+    confirm.querySelector(".err").textContent = "";
+    confirm.hidden = false;
+  }
+  confirm.querySelector(".cancel").addEventListener("click", () => (confirm.hidden = true));
+  confirm.addEventListener("click", (e) => e.target === confirm && (confirm.hidden = true));
+  confirm.querySelector(".danger").addEventListener("click", async () => {
+    const n = deleting;
+    if (!n) return;
+    const headers = {};
+    if (n.mine) headers["X-Wall-Key"] = wallKey();
+    else try { headers.Authorization = "Bearer " + (localStorage.getItem("admin-password") || ""); } catch {}
+    const box = confirm.querySelector(".ask");
+    box.classList.add("busy");
+    try {
+      const r = await fetch("/api/notes/" + n.id, { method: "DELETE", headers });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || "could not delete it, try again");
+      confirm.hidden = true;
+      onNoteDeleted(n.id);
+    } catch (x) {
+      confirm.querySelector(".err").textContent = x.message;
+    }
+    box.classList.remove("busy");
+  });
+
+  // the composer writes a new note, or edits one of yours
+  function openCompose(n) {
+    editing = n ? n.id : null;
+    area.value = n ? n.text : draft.text;
+    setColor(n ? n.color : draft.color);
+    form.querySelector(".pin-it").textContent = n ? "save" : "pin it";
+    err.textContent = "";
+    updateLeft();
+    compose.hidden = false;
+    area.focus({ preventScroll: true });
+  }
+  function closeCompose() {
+    if (!editing) draft = { text: area.value, color };
+    compose.hidden = true;
   }
 
   form.addEventListener("submit", async (e) => {
@@ -290,33 +370,31 @@ export function setupWall({ getName, getGender, isAdmin }) {
     err.textContent = "";
     form.classList.add("busy");
     try {
-      const r = await fetch("/api/notes", {
-        method: "POST",
+      const r = await fetch("/api/notes" + (editing ? "/" + editing : ""), {
+        method: editing ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, color, name: getName(), gender: getGender() }),
+        body: JSON.stringify({ text, color, name: getName(), gender: getGender(), key: wallKey(true) }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.error || "could not pin it, try again");
-      area.value = "";
-      updateLeft();
       compose.hidden = true;
-      onNote(body.note, body.total);
-      elCork.scrollTop = 0;
+      if (editing) onNoteEdited(body.note);
+      else {
+        draft = { text: "", color };
+        onNote(body.note, body.total);
+        elCork.scrollTop = 0;
+      }
     } catch (x) {
       err.textContent = x.message;
     }
     form.classList.remove("busy");
   });
-  root.querySelector(".write").addEventListener("click", () => {
-    err.textContent = "";
-    compose.hidden = false;
-    area.focus({ preventScroll: true });
-  });
-  form.querySelector(".cancel").addEventListener("click", () => (compose.hidden = true));
+  root.querySelector(".write").addEventListener("click", () => openCompose(null));
+  form.querySelector(".cancel").addEventListener("click", closeCompose);
   root.querySelector(".close").addEventListener("click", () => close());
   // a click outside closes that layer (a note being written is kept for next time)
   root.addEventListener("click", (e) => e.target === root && close());
-  compose.addEventListener("click", (e) => e.target === compose && (compose.hidden = true));
+  compose.addEventListener("click", (e) => e.target === compose && closeCompose());
   zoom.addEventListener("click", () => (zoom.hidden = true));
 
   function show() {
@@ -331,7 +409,8 @@ export function setupWall({ getName, getGender, isAdmin }) {
     open = false;
     root.hidden = true;
     zoom.hidden = true;
-    compose.hidden = true;
+    confirm.hidden = true;
+    if (!compose.hidden) closeCompose();
   }
 
   // live, from the room's WebSocket (and our own note, from the POST: whichever comes first)
@@ -340,18 +419,27 @@ export function setupWall({ getName, getGender, isAdmin }) {
     if (!notes.has(n.id)) {
       notes.set(n.id, n);
       if (open) place(n, "prepend").classList.add("new");
-    }
+    } else if (n.mine && !notes.get(n.id).mine) onNoteEdited(n); // the broadcast got here before our own answer
+    status();
+  }
+  function onNoteEdited(n) {
+    const old = notes.get(n.id);
+    if (!old) return; // not loaded here yet: it will come edited when it loads
+    notes.set(n.id, { ...n, mine: n.mine || old.mine });
+    if (open) place(notes.get(n.id));
     status();
   }
   function onNoteDeleted(id, count) {
     if (count != null) total = count;
     else if (notes.has(id)) total = Math.max(0, total - 1);
     notes.delete(id);
+    if (deleting?.id === id) confirm.hidden = true;
+    if (editing === id && !compose.hidden) compose.hidden = true;
     cards.get(id)?.remove();
     cards.delete(id);
     status();
   }
 
   load(); // the board in town shows the latest notes
-  return { show, close, isOpen: () => open, onNote, onNoteDeleted, NEAR };
+  return { show, close, isOpen: () => open, onNote, onNoteEdited, onNoteDeleted, NEAR };
 }

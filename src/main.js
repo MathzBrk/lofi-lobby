@@ -1529,6 +1529,7 @@ function connect() {
     }
     else if (m.t === "radio") receiveCommand(m.command);
     else if (m.t === "note") wall.onNote(m.note, m.total);
+    else if (m.t === "note-edit") wall.onNoteEdited(m.note);
     else if (m.t === "note-del") wall.onNoteDeleted(m.id, m.total);
     else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
     else if (m.t === "rename") {

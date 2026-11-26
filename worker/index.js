@@ -29,10 +29,13 @@
 // Message wall (HTTP, a note is too long for a WebSocket frame): notes kept forever in this room's storage,
 // one key per note ("note:<time>-<id>"), so there is no limit on how many.
 //   GET /api/notes?before=<id>  newest first, NOTES_PAGE at a time
-//   POST /api/notes { name, gender, text, color }  one per NOTE_EVERY_MS per IP, banned IPs refused,
+//   POST /api/notes { name, gender, text, color, key }  one per NOTE_EVERY_MS per IP, banned IPs refused,
 //                                                  same cleaning and word filter as names and chat, no links
-//   DELETE /api/notes/<id>  admin password in the Authorization header
-// New and deleted notes also go out on the WebSocket: { t: "note", note } | { t: "note-del", id }
+//   PATCH /api/notes/<id> { text, color, key }  the writer edits their note
+//   DELETE /api/notes/<id>  the writer (X-Wall-Key header) or the admin (password in the Authorization header)
+// A note belongs to whoever holds its "wall key" (random, kept in the writer's browser; the note stores its hash).
+// New, edited and deleted notes also go out on the WebSocket:
+//   { t: "note", note } | { t: "note-edit", note } | { t: "note-del", id }
 //
 // Stats (Workers Analytics Engine, dataset "lofi_lobby"): one data point per join, leave and chat.
 // No IP, name or chat text is stored: a visitor is a hash of IP + day, only good for counting uniques.
@@ -68,6 +71,7 @@ const NOTE_LINES = 40;
 const NOTE_BYTES = 12_000; // request body: NOTE_MAX characters of any alphabet, plus the JSON around them
 const NOTE_EVERY_MS = 60_000; // one note per minute per IP
 const NOTES_PAGE = 30;
+const NOTE_EDIT_EVERY_MS = 5_000;
 const NOTE_COLORS = ["cream", "yellow", "pink", "blue", "green", "lilac"];
 // rate buckets: capacity, refill per second
 const RATES = { pos: [30, 20], chat: [8, 1], other: [10, 1] };
@@ -94,6 +98,15 @@ const cleanNote = (s) => {
     .trim()
     .slice(0, NOTE_MAX);
 };
+// Whose note is it: the browser keeps a random "wall key" and sends it with a note; the note stores only
+// its SHA-256, which never leaves the server. Showing the key again proves you wrote it (edit, delete).
+async function ownerOf(key) {
+  if (typeof key !== "string" || !/^[a-f0-9]{32}$/.test(key)) return null;
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("wall|" + key));
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+// a note as the browser sees it: never the owner hash, only "mine" for the one asking
+const shown = (id, { owner, ...note }, asking) => ({ id, ...note, ...(asking && owner === asking && { mine: true }) });
 const number = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, n)) : 0;
@@ -151,6 +164,7 @@ export class Room {
     this.state = state;
     this.env = env;
     this.buckets = new Map(); // "ip|type" or "ws-id|pos" -> { tokens, at } (in memory)
+    this.noteEdits = new Map(); // ip -> time of the last note edit (in memory)
     this.spam = new Map(); // ip -> { strikes, mutedUntil, lastStrike, lastText, lastAt }
   }
 
@@ -191,11 +205,12 @@ export class Room {
     const url = new URL(req.url);
     const ip = req.headers.get("CF-Connecting-IP") || "local";
     const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
-    const del = url.pathname.match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})$/);
+    const del = url.pathname.replace("%3A", ":").match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})$/);
     if (req.method === "GET" && url.pathname === "/api/notes") {
       const before = /^note:\d{15}-[a-z0-9]{6}$/.test(url.searchParams.get("before") || "") ? url.searchParams.get("before") : null;
       const page = await this.state.storage.list({ prefix: "note:", reverse: true, limit: NOTES_PAGE + 1, ...(before && { end: before }) });
-      const notes = [...page].slice(0, NOTES_PAGE).map(([id, n]) => ({ id, ...n }));
+      const owner = await ownerOf(req.headers.get("X-Wall-Key"));
+      const notes = [...page].slice(0, NOTES_PAGE).map(([id, n]) => shown(id, n, owner));
       return json({ notes, more: page.size > NOTES_PAGE, total: await this.noteCount() });
     }
     if (req.method === "POST" && url.pathname === "/api/notes") {
@@ -218,15 +233,47 @@ export class Room {
       if (ban > at) return json({ error: "you are banned" }, 403);
       const wait = (last || 0) + NOTE_EVERY_MS - at;
       if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)} s for the next note` }, 429);
-      const note = { name, gender: gender(m.gender), text, at, color: NOTE_COLORS.includes(m.color) ? m.color : "cream" };
+      const owner = await ownerOf(m.key);
+      const note = { name, gender: gender(m.gender), text, at, color: NOTE_COLORS.includes(m.color) ? m.color : "cream", ...(owner && { owner }) };
       const id = `note:${String(at).padStart(15, "0")}-${crypto.randomUUID().replace(/-/g, "").slice(0, 6)}`;
       await this.state.storage.put({ [id]: note, [lastKey]: at, "note-count": count + 1 });
-      this.broadcast({ t: "note", note: { id, ...note }, total: count + 1 });
-      return json({ note: { id, ...note }, total: count + 1 });
+      this.broadcast({ t: "note", note: shown(id, note), total: count + 1 });
+      return json({ note: shown(id, note, owner), total: count + 1 });
+    }
+    // the writer edits their own note: same cleaning as a new one, and a short wait between edits
+    if (req.method === "PATCH" && del) {
+      const bytes = req.headers.get("Content-Length");
+      if (!bytes || !(Number(bytes) <= NOTE_BYTES)) return json({ error: "note too long" }, 413);
+      let m;
+      try { m = JSON.parse(await req.text()); } catch { return json({ error: "bad request" }, 400); }
+      const owner = await ownerOf(m?.key);
+      const raw = cleanNote(m?.text);
+      if (!raw) return json({ error: "write something first" }, 400);
+      if (hasLink(raw)) return json({ error: "links are not allowed on the wall" }, 400);
+      const text = cleanChat(raw);
+      if (text === null) return json({ error: "note blocked" }, 400);
+      const now = Date.now();
+      const [ban, note] = await Promise.all([this.state.storage.get("ban:" + ip), this.state.storage.get(del[1])]);
+      if (ban > now) return json({ error: "you are banned" }, 403);
+      if (!note) return json({ error: "this note is gone" }, 404);
+      if (!owner || !note.owner || !equal(owner, note.owner)) return json({ error: "this note is not yours" }, 403);
+      const wait = (this.noteEdits.get(ip) || 0) + NOTE_EDIT_EVERY_MS - now;
+      if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)} s to edit again` }, 429);
+      this.noteEdits.set(ip, now);
+      const edited = { ...note, text, color: NOTE_COLORS.includes(m.color) ? m.color : note.color, edited: now };
+      await this.state.storage.put(del[1], edited);
+      this.broadcast({ t: "note-edit", note: shown(del[1], edited) });
+      return json({ note: shown(del[1], edited, owner) });
     }
     if (req.method === "DELETE" && del) {
-      const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
-      if (!check.ok) return json({ error: check.msg }, 401);
+      // the writer (their wall key) or the admin (password, same lockout as everywhere)
+      const owner = await ownerOf(req.headers.get("X-Wall-Key"));
+      const note = owner && (await this.state.storage.get(del[1]));
+      if (!(note?.owner && equal(owner, note.owner))) {
+        if (owner && !req.headers.get("Authorization")) return json({ error: "this note is not yours" }, 403);
+        const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
+        if (!check.ok) return json({ error: check.msg }, 401);
+      }
       let total = await this.noteCount();
       if (await this.state.storage.delete(del[1])) await this.state.storage.put("note-count", (total = Math.max(0, total - 1)));
       this.broadcast({ t: "note-del", id: del[1], total });
