@@ -26,6 +26,14 @@
 //  - word filter: bad names refused, bad chat words become *** (worker/moderation.js)
 //  - admin kick (short IP ban) and ban (long IP ban), kept in storage
 //
+// Message wall (HTTP, a note is too long for a WebSocket frame): notes kept forever in this room's storage,
+// one key per note ("note:<time>-<id>"), so there is no limit on how many.
+//   GET /api/notes?before=<id>  newest first, NOTES_PAGE at a time
+//   POST /api/notes { name, gender, text, color }  one per NOTE_EVERY_MS per IP, banned IPs refused,
+//                                                  same cleaning and word filter as names and chat, no links
+//   DELETE /api/notes/<id>  admin password in the Authorization header
+// New and deleted notes also go out on the WebSocket: { t: "note", note } | { t: "note-del", id }
+//
 // Stats (Workers Analytics Engine, dataset "lofi_lobby"): one data point per join, leave and chat.
 // No IP, name or chat text is stored: a visitor is a hash of IP + day, only good for counting uniques.
 //   blob1 event ("join"|"leave"|"chat"), blob2 gender, blob3 country, blob4 visitor
@@ -54,10 +62,17 @@ const MUTE_STEPS_MS = [0, 15_000, 60_000, 5 * 60_000, 30 * 60_000]; // first str
 const STRIKE_RESET_MS = 30 * 60_000;
 const REPEAT_LIMIT = 3; // the same text more than this many times in a row...
 const REPEAT_WINDOW_MS = 30_000; // ...inside this window counts as spam
+// message wall
+const NOTE_MAX = 2000; // characters: room to say something, not a book
+const NOTE_LINES = 40;
+const NOTE_BYTES = 12_000; // request body: NOTE_MAX characters of any alphabet, plus the JSON around them
+const NOTE_EVERY_MS = 60_000; // one note per minute per IP
+const NOTES_PAGE = 30;
+const NOTE_COLORS = ["cream", "yellow", "pink", "blue", "green", "lilac"];
 // rate buckets: capacity, refill per second
 const RATES = { pos: [30, 20], chat: [8, 1], other: [10, 1] };
 
-import { badName, cleanChat, normalize } from "./moderation.js";
+import { badName, cleanChat, hasLink, normalize } from "./moderation.js";
 
 const DIRS = ["down", "up", "left", "right"];
 const cleanText = (s, max) =>
@@ -66,6 +81,19 @@ const cleanText = (s, max) =>
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+// like cleanText, but keeps line breaks (at most 2 in a row, NOTE_LINES in all)
+const cleanNote = (s) => {
+  let lines = 0;
+  return String(s ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n/g, () => (++lines < NOTE_LINES ? "\n" : " "))
+    .trim()
+    .slice(0, NOTE_MAX);
+};
 const number = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, n)) : 0;
@@ -158,6 +186,61 @@ export class Room {
     return Response.json(out, { headers: { "Cache-Control": "no-store" } });
   }
 
+  // ---- message wall ----
+  async notes(req) {
+    const url = new URL(req.url);
+    const ip = req.headers.get("CF-Connecting-IP") || "local";
+    const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+    const del = url.pathname.match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})$/);
+    if (req.method === "GET" && url.pathname === "/api/notes") {
+      const before = /^note:\d{15}-[a-z0-9]{6}$/.test(url.searchParams.get("before") || "") ? url.searchParams.get("before") : null;
+      const page = await this.state.storage.list({ prefix: "note:", reverse: true, limit: NOTES_PAGE + 1, ...(before && { end: before }) });
+      const notes = [...page].slice(0, NOTES_PAGE).map(([id, n]) => ({ id, ...n }));
+      return json({ notes, more: page.size > NOTES_PAGE, total: await this.noteCount() });
+    }
+    if (req.method === "POST" && url.pathname === "/api/notes") {
+      // the body is read before any check, so nothing awaits between the rate check and its write
+      // (two requests at once from one IP can't both pass)
+      const bytes = req.headers.get("Content-Length");
+      if (!bytes || !(Number(bytes) <= NOTE_BYTES)) return json({ error: "note too long" }, 413);
+      let m;
+      try { m = JSON.parse(await req.text()); } catch { return json({ error: "bad request" }, 400); }
+      const raw = cleanNote(m?.text);
+      if (!raw) return json({ error: "write something first" }, 400);
+      if (hasLink(raw)) return json({ error: "links are not allowed on the wall" }, 400);
+      const text = cleanChat(raw);
+      if (text === null) return json({ error: "note blocked" }, 400);
+      let name = cleanText(m.name, 16) || "trainer";
+      if (badName(name) || /admin|moderador|moderator|staff/.test(normalize(name))) name = "trainer";
+      const at = Date.now();
+      const lastKey = "note-at:" + ip;
+      const [ban, last, count] = await Promise.all([this.state.storage.get("ban:" + ip), this.state.storage.get(lastKey), this.noteCount()]);
+      if (ban > at) return json({ error: "you are banned" }, 403);
+      const wait = (last || 0) + NOTE_EVERY_MS - at;
+      if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)} s for the next note` }, 429);
+      const note = { name, gender: gender(m.gender), text, at, color: NOTE_COLORS.includes(m.color) ? m.color : "cream" };
+      const id = `note:${String(at).padStart(15, "0")}-${crypto.randomUUID().replace(/-/g, "").slice(0, 6)}`;
+      await this.state.storage.put({ [id]: note, [lastKey]: at, "note-count": count + 1 });
+      this.broadcast({ t: "note", note: { id, ...note }, total: count + 1 });
+      return json({ note: { id, ...note }, total: count + 1 });
+    }
+    if (req.method === "DELETE" && del) {
+      const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
+      if (!check.ok) return json({ error: check.msg }, 401);
+      let total = await this.noteCount();
+      if (await this.state.storage.delete(del[1])) await this.state.storage.put("note-count", (total = Math.max(0, total - 1)));
+      this.broadcast({ t: "note-del", id: del[1], total });
+      return json({ ok: true });
+    }
+    return json({ error: "not found" }, 404);
+  }
+  // how many notes the wall holds (kept beside them, so nobody has to list them all)
+  async noteCount() {
+    let n = await this.state.storage.get("note-count");
+    if (n == null) await this.state.storage.put("note-count", (n = (await this.state.storage.list({ prefix: "note:" })).size));
+    return n;
+  }
+
   async sql(query) {
     const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
       method: "POST", headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}` }, body: query,
@@ -188,6 +271,10 @@ export class Room {
 
   // daily cron: keep every finished day (of the last 80) in storage, forever
   async archive() {
+    // the wall's "last note" marks are only needed for a minute: don't keep IPs around
+    const marks = await this.state.storage.list({ prefix: "note-at:" });
+    const stale = [...marks].filter(([, at]) => at < Date.now() - NOTE_EVERY_MS).map(([k]) => k);
+    for (let i = 0; i < stale.length; i += 128) await this.state.storage.delete(stale.slice(i, i + 128));
     if (!this.env.CF_ACCOUNT_ID || !this.env.CF_API_TOKEN) return;
     // Cloudflare's own count only goes ~31 days back, so it is archived too
     const today = new Date().toISOString().slice(0, 10);
@@ -215,6 +302,7 @@ export class Room {
   async fetch(req) {
     const path = new URL(req.url).pathname;
     if (path === "/api/stats") return this.stats(req);
+    if (path.startsWith("/api/notes")) return this.notes(req);
     if (path === "/internal/archive") { await this.archive(); return new Response("ok"); }
     if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
     if (this.state.getWebSockets().length >= MAX_PLAYERS) return new Response("room is full", { status: 503 });
@@ -493,6 +581,15 @@ export default {
     // stats: the room's Durable Object checks the admin password (same lockout as the game)
     if (url.pathname === "/api/stats") {
       if (req.method !== "GET") return new Response("method not allowed", { status: 405 });
+      return env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch(req);
+    }
+    // message wall: writes only from the site itself (same origin check as the WebSocket)
+    if (url.pathname === "/api/notes" || url.pathname.startsWith("/api/notes/")) {
+      if (req.method !== "GET") {
+        const origin = req.headers.get("Origin");
+        const ok = [url.origin, ...(env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean)];
+        if (!origin || !ok.includes(origin)) return new Response("origin not allowed", { status: 403 });
+      }
       return env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch(req);
     }
     // /ws/<room>  ->  that room's Durable Object. Everything else is the static site (assets).

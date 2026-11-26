@@ -39,10 +39,11 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | N or the day/night button | switch between day and night for you |
 | R or the rain button | turn the rain on or off for you (greyer sky by day) |
 | F or the full screen button | enter or leave full screen (hidden where the browser can't, e.g. iPhone) |
+| B or the board button, E by the board | open the message wall: read the notes and pin your own |
 | Space | pause the music for you only |
 
 - There is one room, `lobby`, for everyone (the server refuses any other name).
-- Admin: type `/admin` in the chat and enter the password in the login box (`ADMIN_PASSWORD`); `/logout` leaves. Then you can restart or skip the song for everyone, and click a player's name (above them or in the chat) to kick or ban them; `/unban` in the chat lifts every ban.
+- Admin: type `/admin` in the chat and enter the password in the login box (`ADMIN_PASSWORD`); `/logout` leaves. Then you can restart or skip the song for everyone, and click a player's name (above them or in the chat) to kick or ban them, and delete notes on the message wall (the ✕ on a note); `/unban` in the chat lifts every ban.
 - Change the song list in [`src/radio.js`](src/radio.js) (`LISTA`, YouTube video ids).
 
 ## Architecture
@@ -56,6 +57,7 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | Music | YouTube player with no controls; position = clock time since a fixed start, or since the last admin command kept in the object's storage | [ADR 002](docs/adr/002-radio-synced-by-the-clock.md) |
 | Rendering | three.js: sprites as lit planes in a 3D scene, real shadows from each lamp, **every sprite pixel takes the depth of the feet** | [ADR 003](docs/adr/003-sprites-take-the-depth-of-the-feet.md) |
 | Assets | The repo and live site include the **Twinleaf FBX town, its textures and both trainer sheets** from `public/assets/`; code-generated fallbacks remain for load failures | [ADR 005](docs/adr/005-version-and-deploy-game-assets.md) |
+| Message wall | Notes go over HTTP (`/api/notes`), not the WebSocket, and live in the room object's storage: **one key per note**, so the wall has no size limit and is read a page at a time | [SECURITY.md](SECURITY.md) |
 | Admin | Secret `ADMIN_PASSWORD`, checked in the room object in constant time, few tries per connection | [SECURITY.md](SECURITY.md) |
 
 **Limits of this design.** There is a single room (`lobby`), and a room is one object, so it holds a few dozen players (capped at 100); growing past that would mean opening more rooms, not a bigger one. Positions are relayed, not simulated on the server, so a modified client can teleport; nothing in the lobby is worth cheating for. The YouTube player can't be hidden or fully controlled (ads, embeds disabled by the owner): those videos are skipped.

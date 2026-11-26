@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
+import { createBoard, setupWall } from "./board.js";
 
 // ---- Asset config (change here to use other files) ----
 const TOWN = {
@@ -229,6 +230,7 @@ function prepareTown(fbx) {
         solidBoxes.push(new THREE.Box3().setFromObject(o));
     });
     placeLampPairs();
+    board.position.y = groundHeight(board.position.x, board.position.z);
 }
 
 // ---- Original village (default on the published site) ----
@@ -463,6 +465,10 @@ const LAMP_POSTS = [
 ];
 const lampPosts = LAMP_POSTS.map(([x, z]) => createLampPost(x, z));
 const lampPostSolids = lampPosts.flatMap((p) => p.children.filter((c) => c.isMesh));
+// message wall: a cork board under the lamp light, in front of the lower-left house's window
+const BOARD_AT = [-7.5, 15];
+const board = createBoard(scene);
+board.position.set(BOARD_AT[0], 0, BOARD_AT[1]);
 
 // ---- Day / night ----
 // Only for you, like mute: it changes how you see the town, not the room.
@@ -936,6 +942,7 @@ function isFree(x, z, currentY) {
     inPond(x, z + BODY_RADIUS)
   )
     return false;
+  if (Math.abs(x - board.position.x) < 3.8 + BODY_RADIUS * 0.5 && Math.abs(z - board.position.z) < 0.5 + BODY_RADIUS * 0.5) return false;
   for (const p of lampPosts)
     if (
       Math.hypot(p.position.x - x, p.position.z - z) <
@@ -1233,9 +1240,14 @@ function updateOcclusion() {
   const toCam = camera.position
     .clone()
     .sub(feet)
-    .normalize()
-    .multiplyScalar(2.4);
-  feetUniforms.uFeet.value.copy(feet.add(toCam));
+    .normalize();
+  // the message board is thin, so right behind it the full margin would put the feet in front of it:
+  // there the margin shrinks to what fits between the feet and the board's back
+  let margin = 2.4;
+  const behind = board.position.z - pos.z;
+  if (behind > 0 && Math.abs(pos.x - board.position.x) < 5)
+    margin = Math.max(0, Math.min(margin, behind * toCam.z - 0.3));
+  feetUniforms.uFeet.value.copy(feet.add(toCam.multiplyScalar(margin)));
 }
 
 // ---- Movement ----
@@ -1516,6 +1528,8 @@ function connect() {
       elMsgs.scrollTop = elMsgs.scrollHeight;
     }
     else if (m.t === "radio") receiveCommand(m.command);
+    else if (m.t === "note") wall.onNote(m.note, m.total);
+    else if (m.t === "note-del") wall.onNoteDeleted(m.id, m.total);
     else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
     else if (m.t === "rename") {
       // the server refused our name and gave us another one
@@ -1825,6 +1839,30 @@ elInput.addEventListener("focus", () => {
 });
 elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePlaceholder));
 
+// ---- Message wall ----
+const wall = setupWall({ getName: () => NAME, getGender: () => GENDER, isAdmin: () => IS_ADMIN });
+const wallBtn = document.querySelector("#wall-btn");
+wallBtn.addEventListener("click", (e) => { e.currentTarget.blur(); wall.show(); });
+// near the board: a prompt over it ("E" or tap to read)
+const wallPrompt = Object.assign(document.createElement("button"), { id: "wall-prompt", type: "button" });
+wallPrompt.innerHTML = MOBILE ? "tap to read the wall" : "<kbd>E</kbd> read the wall";
+wallPrompt.addEventListener("click", () => wall.show());
+document.body.append(wallPrompt);
+const nearBoard = () => Math.hypot(pos.x - board.position.x, pos.z - board.position.z - 1) < wall.NEAR;
+addEventListener("keydown", (e) => {
+  if (typing() || e.repeat || gamePaused || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if ((k === "e" && nearBoard()) || k === "b") wall.show();
+});
+function updateWallPrompt() {
+  const show = nearBoard() && !wall.isOpen() && !gamePaused;
+  wallPrompt.classList.toggle("on", show);
+  if (!show) return;
+  _v.set(board.position.x, board.position.y + 7.4, board.position.z).project(camera);
+  wallPrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
+  wallPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
+}
+
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
   checkSavedPosition();
@@ -1860,7 +1898,7 @@ function loop() {
     // facing follows the stronger axis
     dir = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? "right" : "left") : dz > 0 ? "down" : "up";
   }
-  if (gamePaused) {
+  if (gamePaused || wall.isOpen()) {
     dx = 0;
     dz = 0;
   }
@@ -1900,6 +1938,7 @@ function loop() {
   renderer.render(scene, camera);
   updateNameTags();
   updateBubbles();
+  updateWallPrompt();
   requestAnimationFrame(loop);
 }
 loop();
