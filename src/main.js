@@ -1438,7 +1438,10 @@ const SPEED = 9;
 
 // ---- Sitting ----
 let mySeat = -1;
-const sendSeat = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "sit", seat: mySeat }));
+// each sit/stand is numbered and the server's corrections carry the number back, so a late
+// answer to an older request can't stand you up from the seat you have now
+let sitN = 0;
+const sendSeat = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "sit", seat: mySeat, n: ++sitN }));
 const seatTaken = (id) => [...others.values()].some((o) => o.seat === id);
 const sitBtn = document.querySelector("#sit");
 function nearestFreeSeat() {
@@ -1740,6 +1743,7 @@ function connect() {
       // you're not on the seat you asked for, so stand up; or the room still has you seated
       // after you stood up, so say it again
       if (m.id === myId) {
+        if (m.n !== sitN) return;
         if (m.seat !== mySeat && mySeat >= 0) standUp(m.seat >= 0);
         else if (m.seat >= 0 && mySeat < 0) setTimeout(sendSeat, 1000);
       } else {

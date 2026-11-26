@@ -2,6 +2,7 @@
 // Protocol (JSON):
 //   client -> server: { t: "hello", name, gender, x, z, dir } | { t: "pos", x, z, dir, step }
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
+//                     { t: "sit", seat, n }   (bench seat 0..15 or -1 to stand; n numbers the request)
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
 //                     { t: "who", id, password }   (admin: who is this player)
@@ -10,6 +11,7 @@
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, text, at } | { t: "name", id, name }
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "history", messages: [{ id, name, text, at }] } (on join)
 //                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
 //                     { t: "who", id, tag, names, sameTag } (admin only)
@@ -145,10 +147,12 @@ export class Room {
     const p = ws.deserializeAttachment();
     if (!p) return;
     const type = m.t === "pos" ? "pos" : m.t === "chat" ? "chat" : m.t === "sit" ? "sit" : "other";
+    // the seat the room really has for this player, tagged with the request it answers
+    const seatReply = () => ws.send(JSON.stringify({ t: "seat", id: p.id, seat: p.seat ?? -1, n: Number.isSafeInteger(m.n) ? m.n : 0 }));
     if (!this.allowed(p, type)) {
       if (type === "chat") this.strike(ws, p.ip);
       // a dropped sit would leave the client and the room disagreeing: tell it where it really is
-      if (type === "sit") ws.send(JSON.stringify({ t: "seat", id: p.id, seat: p.seat ?? -1 }));
+      if (type === "sit") seatReply();
       return;
     }
 
@@ -183,7 +187,7 @@ export class Room {
       // with the seat the room really has for them
       const seat = Number.isInteger(m.seat) && m.seat >= 0 && m.seat < MAX_SEATS ? m.seat : -1;
       if (seat >= 0 && this.players().some((q) => q.id !== p.id && q.seat === seat)) {
-        ws.send(JSON.stringify({ t: "seat", id: p.id, seat: p.seat ?? -1 }));
+        seatReply();
         return;
       }
       p.seat = seat;
