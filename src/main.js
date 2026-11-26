@@ -1216,38 +1216,46 @@ function setFrame(dir, step, running = false) {
 // walls/roofs behind it). If something is in front, it occludes normally.
 // Every sprite pixel uses the depth of the FEET (pulled slightly forward):
 // whatever is in front of the feet covers the whole body; whatever is behind never cuts it.
-sprite.renderOrder = 10;
-const feetUniforms = { uFeet: { value: new THREE.Vector3() } };
-sprite.material.depthTest = true;
-sprite.material.depthWrite = true;
-sprite.material.onBeforeCompile = (shader) => {
-  shader.uniforms.uFeet = feetUniforms.uFeet;
-  shader.vertexShader = shader.vertexShader
-    .replace("#include <common>", "#include <common>\nuniform vec3 uFeet;")
-    .replace(
-      "#include <project_vertex>",
-      `#include <project_vertex>
+// Every trainer does this the same way (yours and the others'), so between two trainers the one
+// whose feet are nearer the camera is always the one in front, from head to toe.
+function useFeetDepth(mesh) {
+  const uFeet = { value: new THREE.Vector3() };
+  mesh.renderOrder = 10;
+  mesh.material.depthTest = true;
+  mesh.material.depthWrite = true;
+  mesh.material.onBeforeCompile = (shader) => {
+    shader.uniforms.uFeet = uFeet;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nuniform vec3 uFeet;")
+      .replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
 vec4 feetClip = projectionMatrix * viewMatrix * vec4(uFeet, 1.0);
 gl_Position.z = (feetClip.z / feetClip.w) * gl_Position.w;`,
-    );
-};
-function updateOcclusion() {
-  // reference point: the feet, pulled a bit toward the camera
-  const feet = new THREE.Vector3(pos.x, pos.y + 0.2, pos.z);
+      );
+  };
+  return uFeet.value;
+}
+const myFeet = useFeetDepth(sprite);
+const _toCam = new THREE.Vector3();
+// reference point for a trainer standing at (x, y, z): the feet, pulled a bit toward the camera
+function setFeet(feet, x, y, z) {
+  feet.set(x, y + 0.2, z);
   // 2.4: covers the body height seen from above (tops of objects right behind
   // are closer to the camera than the feet). Smaller = objects behind cut the head;
   // larger = the sprite starts drawing over things that are in front of it.
-  const toCam = camera.position
-    .clone()
-    .sub(feet)
-    .normalize();
+  _toCam.copy(camera.position).sub(feet).normalize();
   // the message board is thin, so right behind it the full margin would put the feet in front of it:
   // there the margin shrinks to what fits between the feet and the board's back
   let margin = 2.4;
-  const behind = board.position.z - pos.z;
-  if (behind > 0 && Math.abs(pos.x - board.position.x) < 5)
-    margin = Math.max(0, Math.min(margin, behind * toCam.z - 0.3));
-  feetUniforms.uFeet.value.copy(feet.add(toCam.multiplyScalar(margin)));
+  const behind = board.position.z - z;
+  if (behind > 0 && Math.abs(x - board.position.x) < 5)
+    margin = Math.max(0, Math.min(margin, behind * _toCam.z - 0.3));
+  feet.addScaledVector(_toCam, margin);
+}
+function updateOcclusion() {
+  setFeet(myFeet, pos.x, pos.y, pos.z);
+  for (const o of others.values()) setFeet(o.feet, o.mesh.position.x, o.mesh.position.y, o.mesh.position.z);
 }
 
 // ---- Movement ----
@@ -1474,6 +1482,7 @@ function createOther(p) {
   scene.add(mesh);
   const o = {
     mesh,
+    feet: useFeetDepth(mesh),
     tex,
     cfg: available ? CROP[g] : GRID,
     target: new THREE.Vector3(p.x, 0, p.z),
@@ -1930,9 +1939,9 @@ function loop() {
   sprite.position.copy(pos);
   if (running && GENDER === "male") sprite.position.y -= 0.8;
   shadow.position.set(pos.x, pos.y + 0.05, pos.z);
-  updateOcclusion();
   camera.position.set(pos.x, pos.y + 38, pos.z + 42);
   camera.lookAt(pos.x, pos.y + 1, pos.z);
+  updateOcclusion();
   // facing the camera, tilted only halfway (the shadow looks like a standing body)
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
 
