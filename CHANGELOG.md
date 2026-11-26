@@ -3,7 +3,9 @@
 ## Unreleased
 
 ### Added
-- **Benches**: five park benches around the town (wooden slats on iron ends, like the lamp posts), two seats each, some facing the camera and some sideways along the paths. Walk up and a "press E to sit" note shows over the seat; press **E** (or the button that appears in the top card) to sit, and any move key stands you up. Everyone sees you sitting, a seat holds one player, and a bench hides whoever stands behind it.
+- **Benches**: park benches around the town (wooden slats on iron ends, like the lamp posts), two seats each, some facing the camera and some sideways along the paths. Walk up and a "press E to sit" note shows over the seat; press **E** (or the button that appears in the top card) to sit, and any move key stands you up. Everyone sees you sitting, a seat holds one player, and a bench hides whoever stands behind it. Two of them face the pond, between the lamp posts at its ends, with a few candles on the grass. While sitting, **Q** (or the cup button) puts a laptop on your lap or a coffee in your hand, and everyone sees it. You get up toward the side you walked off, and the camera glides instead of jumping.
+- **Message wall**: a cork board by the lamp posts, in front of the lower-left house. Walk up and press E (or the board button, or B) to read the notes people left and pin your own: up to 2,000 characters, six paper colours (a new note starts on a random one), one note a minute, no links. Notes are kept forever, appear live for everyone in the room, and the board in town shows the latest ones. You can edit or delete your own notes (deleting asks first; an edited note says so), and the admin can delete any note.
+- **Stats** for the admin at `/stats.html`: online now, visitors per day, peak online, time in the room, busiest hours, countries and chat volume (Workers Analytics Engine; no IP, name or chat text is stored). `scripts/stats-token.sh` gives it read access. Each finished day is archived in the room's storage by a daily cron, so history outlives the 3 months of Analytics Engine, and a Cloudflare-measured connections-per-day chart goes back to launch.
 - Cleaner HUD: the top card buttons are icons with an instant label on hover and their key in the corner, the shortcut bar became a "?" list (shown once on the first visit), the player count reads "N online", the radio TV is smaller, and respawn asks for a second click.
 - **Full screen**: a button in the top card (and the F key) enters or leaves full screen, handy for leaving the lobby open next to your work. Only for you; hidden where the browser doesn't support it.
 - **Respawn** button in the top card: sends your trainer back to the spawn if you got stuck.
@@ -24,6 +26,7 @@
 - Progressive mute for chat spam (rate exceeded, or the same text 4+ times in a row): warning, then 15 s, 1 min, 5 min, 30 min.
 
 ### Changed
+- Two trainers standing close: the one in front now covers the other from head to toe (the feet of the one behind used to show through). Every trainer is drawn at the depth of its feet, not only yours.
 - Admin login: type `/admin` in the chat and then the password in its own login box instead of `?admin=` in the URL; `/logout` leaves. Admin lock is looser: 20 tries, then 1 minute.
 - You come back where you were: the position is remembered in the browser and sent when you (re)connect, so others see you in the right spot even if you stand still.
 - The chat box stays open after sending, so you can keep talking; Esc or Enter on an empty box goes back to walking.

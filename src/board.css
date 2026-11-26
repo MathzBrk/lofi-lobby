@@ -1,0 +1,123 @@
+/* message wall: a cork board in a wooden frame, notes on paper, same night/glass HUD around it */
+#wall-prompt { position: fixed; z-index: 2; transform: translate(-50%, -100%); font: inherit; font-size: 11px; color: #F2F2F5;
+  background: rgba(10,11,16,.84); border: 1px solid rgba(255,201,90,.6); border-radius: 6px; padding: 6px 10px; cursor: pointer;
+  opacity: 0; pointer-events: none; transition: opacity .2s; white-space: nowrap; animation: wall-bob 1.6s ease-in-out infinite; }
+#wall-prompt.on { opacity: 1; pointer-events: auto; }
+#wall-prompt kbd { font: inherit; color: #1b1406; background: #ffc95a; border-radius: 3px; padding: 0 5px; margin-right: 4px; }
+@keyframes wall-bob { 50% { margin-top: -4px; } }
+
+#wall { position: fixed; inset: 0; z-index: 8; display: flex; align-items: center; justify-content: center; padding: 24px; overflow: hidden;
+  background: rgba(5,6,12,.6); backdrop-filter: blur(4px); animation: wall-in .2s ease-out; }
+#wall[hidden] { display: none; }
+@keyframes wall-in { from { opacity: 0; } }
+#wall .board { width: min(1040px, 100%); height: min(760px, 100%); flex: none; box-sizing: border-box; display: flex; flex-direction: column;
+  background: #5b3b22; border-radius: 8px; padding: 0 14px 14px;
+  /* wooden frame: grain lines, a lighter top edge, a dark inner lip */
+  background-image: repeating-linear-gradient(90deg, rgba(0,0,0,.06) 0 2px, transparent 2px 9px);
+  box-shadow: inset 0 2px 0 #7a5233, inset 0 -3px 0 #3a2414, 0 18px 50px rgba(0,0,0,.55); animation: wall-up .25s ease-out; }
+@keyframes wall-up { from { transform: translateY(14px); } }
+#wall header { display: flex; align-items: center; gap: 12px; padding: 14px 4px 12px; color: #F2F2F5; }
+#wall header b { font-weight: 400; font-size: 18px; text-shadow: 0 2px 0 #3a2414; }
+#wall header .count { color: #e3c9a3; font-size: 11px; margin-right: auto; }
+#wall header button { font: inherit; font-size: 12px; color: #F2F2F5; background: rgba(0,0,0,.25); border: 1px solid rgba(255,255,255,.22);
+  border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+#wall header button:hover { border-color: #ffc95a; color: #ffc95a; }
+#wall header .write { color: #1b1406; background: #ffc95a; border-color: #ffc95a; }
+#wall header .write:hover { background: #ffd47a; color: #1b1406; }
+#wall header .close { width: 34px; padding: 7px 0; }
+
+#wall .cork { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-radius: 4px; padding: 26px 22px;
+  background-color: #b8864f;
+  background-image: radial-gradient(#a3743f 1px, transparent 1.4px), radial-gradient(#c99a62 1px, transparent 1.4px),
+                    radial-gradient(rgba(0,0,0,.08) 1px, transparent 1.6px);
+  background-size: 9px 9px, 13px 13px, 5px 7px; background-position: 0 0, 4px 6px, 2px 1px;
+  box-shadow: inset 0 3px 10px rgba(0,0,0,.4); scrollbar-color: #7a5233 transparent; }
+/* columns filled by board.js (each note to the shortest one) */
+#wall .notes { display: flex; align-items: flex-start; gap: 22px; }
+#wall .notes .col { flex: 1; min-width: 0; }
+#wall .empty { text-align: center; color: #3a2414; font-size: 13px; margin: 80px 0; }
+#wall .more { height: 1px; }
+
+/* a note: paper, a little tilt, a pin, a soft shadow on the cork */
+#wall .paper { --tilt: 0deg; --pin: #e0473e; position: relative; box-sizing: border-box; margin: 0 0 24px; padding: 20px 16px 12px;
+  background: #f4ead2; color: #2b2118; border-radius: 2px; transform: rotate(var(--tilt));
+  box-shadow: 0 1px 0 rgba(0,0,0,.08), 2px 5px 10px rgba(40,22,8,.35); transition: transform .15s; font-family: "Pixelify Sans", Silkscreen, monospace; }
+#wall article.paper { cursor: default; }
+#wall article.paper:hover { transform: rotate(0deg) translateY(-2px); z-index: 1; }
+#wall .paper[data-color=yellow] { background: #ffe08a; } #wall .paper[data-color=pink] { background: #ffc2cf; }
+#wall .paper[data-color=blue] { background: #bfe0ff; } #wall .paper[data-color=green] { background: #c9ecb4; }
+#wall .paper[data-color=lilac] { background: #dccbff; }
+#wall .pin { position: absolute; left: 50%; top: -6px; width: 14px; height: 14px; margin-left: -7px; border-radius: 50%; background: var(--pin);
+  box-shadow: inset -2px -2px 0 rgba(0,0,0,.25), inset 2px 2px 0 rgba(255,255,255,.45), 1px 3px 3px rgba(0,0,0,.35); }
+#wall .text { margin: 0; font-size: 15px; line-height: 21px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 252px; overflow: hidden; }
+#wall .paper.long .text { -webkit-mask-image: linear-gradient(#000 75%, transparent); mask-image: linear-gradient(#000 75%, transparent); }
+#wall .notes .paper.long { cursor: zoom-in; }
+#wall .notes .paper.long footer::after { content: "read all"; order: 1; color: #2b2118; text-decoration: underline; }
+#wall .notes .paper.long time { margin-left: auto; }
+#wall .paper footer { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 8px;
+  border-top: 1px dashed rgba(43,33,24,.25); font-family: Silkscreen, monospace; font-size: 10px; color: rgba(43,33,24,.65); }
+#wall .paper .who { color: #2b2118; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#wall .paper .who::before { content: "♂ "; color: #3e7be0; } #wall .paper .who.female::before { content: "♀ "; color: #d9487a; }
+/* edit / delete: on your own notes (and delete for the admin), shown on hover or always on touch */
+#wall .paper .acts { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; opacity: 0; transition: opacity .1s; }
+#wall .paper:hover .acts, #wall .paper .acts:focus-within { opacity: 1; }
+@media (hover: none) { #wall .paper .acts { opacity: 1; } }
+#wall .paper .acts button { font: inherit; font-family: Silkscreen, monospace; font-size: 9px; color: rgba(43,33,24,.7); background: none;
+  border: 0; border-radius: 3px; padding: 2px 4px; cursor: pointer; }
+#wall .paper .acts button:hover { color: #2b2118; background: rgba(43,33,24,.12); }
+#wall .paper .acts button:last-child:hover { color: #fff; background: #c0392b; }
+#wall .paper.new { animation: wall-pin .45s cubic-bezier(.3,1.6,.5,1); }
+@keyframes wall-pin { from { transform: translateY(-30px) rotate(-8deg) scale(1.08); opacity: 0; } }
+
+/* layers over the cork: the note being written, and a long note opened */
+#wall .over { position: absolute; inset: 0; z-index: 9; display: flex; align-items: center; justify-content: center; padding: 24px;
+  background: rgba(5,6,12,.6); animation: wall-in .15s ease-out; }
+#wall .over[hidden] { display: none; }
+#wall .over[data-over=zoom] { cursor: zoom-out; }
+#wall .over .paper { width: min(560px, 100%); max-height: 100%; overflow-y: auto; margin: 0; padding: 26px 22px 16px; transform: none; cursor: auto;
+  box-shadow: 0 18px 50px rgba(0,0,0,.5); animation: wall-up .2s ease-out; }
+#wall .over .pin { top: 6px; }
+#wall .over .text { max-height: none; font-size: 16px; line-height: 23px; }
+
+/* "delete this note?" */
+#wall .over .ask { width: min(380px, 100%); }
+#wall .ask blockquote { margin: 10px 0; padding: 8px 10px; font-size: 13px; line-height: 18px; background: rgba(43,33,24,.08); border-radius: 3px;
+  overflow-wrap: anywhere; white-space: pre-wrap; max-height: 110px; overflow: hidden; }
+#wall .ask small { font-family: Silkscreen, monospace; font-size: 10px; color: rgba(43,33,24,.65); }
+#wall .ask .row { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-family: Silkscreen, monospace; }
+#wall .ask .err { color: #b3261e; margin-right: auto; }
+#wall .ask button { font: inherit; font-size: 11px; border-radius: 4px; padding: 7px 14px; cursor: pointer; }
+#wall .ask .cancel { color: #2b2118; background: none; border: 1px solid rgba(43,33,24,.3); }
+#wall .ask .danger { color: #fff; background: #c0392b; border: 1px solid #c0392b; }
+#wall .ask .danger:hover { background: #a93226; }
+#wall .ask.busy { opacity: .6; pointer-events: none; }
+
+/* the note being written: ruled paper */
+#wall .compose textarea { display: block; width: 100%; box-sizing: border-box; height: 231px; max-height: 50vh; resize: none; border: 0; outline: none;
+  background: repeating-linear-gradient(transparent 0 22px, rgba(43,33,24,.14) 22px 23px) local; margin: 0;
+  font: inherit; font-size: 16px; line-height: 23px; color: #2b2118; padding: 0; }
+#wall .compose textarea::placeholder { color: rgba(43,33,24,.45); }
+#wall .compose .row { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-family: Silkscreen, monospace; }
+#wall .compose .colors { display: flex; gap: 6px; margin-right: auto; }
+#wall .compose .colors button { width: 20px; height: 20px; padding: 0; border: 1px solid rgba(43,33,24,.35); border-radius: 3px; cursor: pointer; }
+#wall .compose .colors button.on { outline: 2px solid #2b2118; outline-offset: 1px; }
+#wall .compose small { font-size: 10px; color: rgba(43,33,24,.6); }
+#wall .compose .err { color: #b3261e; margin-right: auto; }
+#wall .compose .cancel, #wall .compose .pin-it { font: inherit; font-size: 11px; border-radius: 4px; padding: 7px 14px; cursor: pointer; }
+#wall .compose .cancel { color: #2b2118; background: none; border: 1px solid rgba(43,33,24,.3); }
+#wall .compose .pin-it { color: #F2F2F5; background: #2b2118; border: 1px solid #2b2118; }
+#wall .compose .pin-it:hover { background: #4a3828; }
+#wall .compose.busy { opacity: .6; pointer-events: none; }
+
+@media (pointer: coarse), (max-width: 640px) {
+  #wall { padding: 8px; padding-top: calc(8px + env(safe-area-inset-top)); }
+  #wall .board { height: 100%; padding: 0 8px 8px; }
+  #wall header { gap: 8px; } #wall header b { font-size: 15px; } #wall header .count { display: none; }
+  #wall header b { margin-right: auto; }
+  #wall .cork { padding: 20px 12px; }
+  #wall .notes { gap: 14px; }
+  #wall .notes .text { font-size: 14px; line-height: 20px; max-height: 240px; }
+  #wall .notes .paper { padding: 18px 12px 10px; }
+  #wall .notes .paper.long footer::after { display: none; } /* no room: the fade says there is more */
+  #wall .over { padding: 12px; align-items: flex-start; padding-top: calc(12px + env(safe-area-inset-top)); } /* above the phone keyboard */
+}

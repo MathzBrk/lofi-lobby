@@ -11,6 +11,7 @@
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, text, at } | { t: "name", id, name }
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "hold", item }   (what you hold while sitting: 0 nothing, 1 laptop, 2 coffee)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "history", messages: [{ id, name, text, at }] } (on join)
 //                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
@@ -27,6 +28,25 @@
 //  - all text is stripped of control characters and truncated; numbers finite and clamped
 //  - word filter: bad names refused, bad chat words become *** (worker/moderation.js)
 //  - admin kick (short IP ban) and ban (long IP ban), kept in storage
+//
+// Message wall (HTTP, a note is too long for a WebSocket frame): notes kept forever in this room's storage,
+// one key per note ("note:<time>-<id>"), so there is no limit on how many.
+//   GET /api/notes?before=<id>  newest first, NOTES_PAGE at a time
+//   POST /api/notes { name, gender, text, color, key }  one per NOTE_EVERY_MS per IP, banned IPs refused,
+//                                                  same cleaning and word filter as names and chat, no links
+//   PATCH /api/notes/<id> { text, color, key }  the writer edits their note
+//   POST /api/notes/<id>/claim  the admin takes a note nobody owns (written before wall keys existed)
+//   DELETE /api/notes/<id>  the writer (X-Wall-Key header) or the admin (password in the Authorization header)
+// A note belongs to whoever holds its "wall key" (random, kept in the writer's browser; the note stores its hash).
+// New, edited and deleted notes also go out on the WebSocket:
+//   { t: "note", note } | { t: "note-edit", note } | { t: "note-del", id }
+//
+// Stats (Workers Analytics Engine, dataset "lofi_lobby"): one data point per join, leave and chat.
+// No IP, name or chat text is stored: a visitor is a hash of IP + day, only good for counting uniques.
+//   blob1 event ("join"|"leave"|"chat"), blob2 gender, blob3 country, blob4 visitor
+//   double1 players online, double2 seconds in the room (leave)
+// /api/stats (admin password in the Authorization header) reads them back through the SQL API
+// (CF_ACCOUNT_ID and CF_API_TOKEN secrets) for public/stats.html.
 
 const MAX_PLAYERS = 100;
 // v1 has a single room; any other name is refused so nobody can spin up extra rooms (and extra cost)
@@ -50,10 +70,18 @@ const MUTE_STEPS_MS = [0, 15_000, 60_000, 5 * 60_000, 30 * 60_000]; // first str
 const STRIKE_RESET_MS = 30 * 60_000;
 const REPEAT_LIMIT = 3; // the same text more than this many times in a row...
 const REPEAT_WINDOW_MS = 30_000; // ...inside this window counts as spam
+// message wall
+const NOTE_MAX = 2000; // characters: room to say something, not a book
+const NOTE_LINES = 40;
+const NOTE_BYTES = 12_000; // request body: NOTE_MAX characters of any alphabet, plus the JSON around them
+const NOTE_EVERY_MS = 60_000; // one note per minute per IP
+const NOTES_PAGE = 30;
+const NOTE_EDIT_EVERY_MS = 5_000;
+const NOTE_COLORS = ["cream", "yellow", "pink", "blue", "green", "lilac"];
 // rate buckets: capacity, refill per second
 const RATES = { pos: [30, 20], chat: [8, 1], sit: [20, 6], other: [10, 1] };
 
-import { badName, cleanChat, normalize } from "./moderation.js";
+import { badName, cleanChat, hasLink, normalize } from "./moderation.js";
 
 const DIRS = ["down", "up", "left", "right"];
 const cleanText = (s, max) =>
@@ -62,6 +90,30 @@ const cleanText = (s, max) =>
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, max);
+// like cleanText, but keeps line breaks (at most 2 in a row, NOTE_LINES in all)
+const cleanNote = (s) => {
+  let lines = 0;
+  return String(s ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\n/g, () => (++lines < NOTE_LINES ? "\n" : " "))
+    .trim()
+    .slice(0, NOTE_MAX);
+};
+// Whose note is it: the browser keeps a random "wall key" and sends it with a note; the note stores only
+// its SHA-256, which never leaves the server. Showing the key again proves you wrote it (edit, delete).
+async function ownerOf(key) {
+  if (typeof key !== "string" || !/^[a-f0-9]{32}$/.test(key)) return null;
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("wall|" + key));
+  return [...new Uint8Array(hash)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+// a note as the browser sees it: never the owner hash, only "mine" for the one asking
+// (and "open" for a note nobody owns, from before wall keys: the admin can claim those)
+const shown = (id, { owner, ...note }, asking) =>
+  ({ id, ...note, ...(asking && owner === asking && { mine: true }), ...(!owner && { open: true }) });
 const number = (v) => {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, n)) : 0;
@@ -77,15 +129,249 @@ function equal(a, b) {
   return diff === 0;
 }
 
+async function visitorOf(ip) {
+  const day = new Date().toISOString().slice(0, 10);
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(ip + "|" + day));
+  return [...new Uint8Array(hash).slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// last 30 days, answered by the Analytics Engine SQL API
+const STATS_QUERIES = {
+  daily: `SELECT toStartOfDay(timestamp) AS day, SUM(_sample_interval) AS joins, COUNT(DISTINCT blob4) AS visitors, MAX(double1) AS peak
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY day ORDER BY day`,
+  sessions: `SELECT toStartOfDay(timestamp) AS day, SUM(_sample_interval * double2) / SUM(_sample_interval) AS avgSeconds
+          FROM lofi_lobby WHERE blob1 = 'leave' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY day ORDER BY day`,
+  chat: `SELECT toStartOfDay(timestamp) AS day, SUM(_sample_interval) AS messages
+          FROM lofi_lobby WHERE blob1 = 'chat' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY day ORDER BY day`,
+  hours: `SELECT toHour(timestamp) AS hour, SUM(_sample_interval) AS joins
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY hour ORDER BY hour`,
+  countries: `SELECT blob3 AS country, COUNT(DISTINCT blob4) AS visitors
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY country ORDER BY visitors DESC LIMIT 12`,
+  genders: `SELECT blob2 AS gender, SUM(_sample_interval) AS joins
+          FROM lofi_lobby WHERE blob1 = 'join' AND timestamp > NOW() - INTERVAL '30' DAY GROUP BY gender`,
+};
+
+// one finished day, for the archive (Analytics Engine keeps only 3 months)
+const dayQuery = (day) => `SELECT blob1 AS event, SUM(_sample_interval) AS n, COUNT(DISTINCT blob4) AS visitors,
+  MAX(double1) AS peak, SUM(_sample_interval * double2) AS seconds
+  FROM lofi_lobby WHERE timestamp >= toDateTime('${day} 00:00:00') AND timestamp < toDateTime('${day} 00:00:00') + INTERVAL '1' DAY
+  GROUP BY event`;
+
+// Measured by Cloudflare since launch (the API allows about 31 days back): Worker requests per day (with assets
+// served before the Worker, almost all are WebSocket connections: page loads and reconnects) and the most
+// WebSockets open at once on the Durable Object (peak online, from before the game logged its own stats).
+const CONNECTIONS_QUERY = `query ($account: String!, $since: Date!) { viewer { accounts(filter: { accountTag: $account }) {
+  workersInvocationsAdaptive(limit: 100, filter: { scriptName: "lofi-lobby", date_geq: $since }, orderBy: [date_ASC]) {
+    sum { requests } dimensions { date } }
+  durableObjectsPeriodicGroups(limit: 100, filter: { date_geq: $since }, orderBy: [date_ASC]) {
+    max { activeWebsocketConnections } dimensions { date } } } } }`;
+
 export class Room {
   constructor(state, env) {
     this.state = state;
     this.env = env;
     this.buckets = new Map(); // "ip|type" or "ws-id|pos" -> { tokens, at } (in memory)
+    this.noteEdits = new Map(); // ip -> time of the last note edit (in memory)
     this.spam = new Map(); // ip -> { strikes, mutedUntil, lastStrike, lastText, lastAt }
   }
 
+  stat(event, p, extra = []) {
+    try {
+      this.env.STATS?.writeDataPoint({
+        indexes: [event],
+        blobs: [event, p.gender || "", p.country || "", p.visitor || ""],
+        doubles: [this.state.getWebSockets().length, ...extra],
+      });
+    } catch {}
+  }
+
+  async stats(req) {
+    const ip = req.headers.get("CF-Connecting-IP") || "local";
+    const password = (req.headers.get("Authorization") || "").replace(/^Bearer /, "");
+    const check = await this.checkAdmin(ip, password);
+    if (!check.ok) return Response.json({ error: check.msg }, { status: 401 });
+    if (!this.env.CF_ACCOUNT_ID || !this.env.CF_API_TOKEN) return Response.json({ error: "stats not set up" }, { status: 501 });
+    const out = { online: this.state.getWebSockets().length };
+    await Promise.all(Object.entries(STATS_QUERIES).map(async ([key, sql]) => {
+      const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
+        method: "POST", headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}` }, body: sql,
+      });
+      out[key] = r.ok ? (await r.json()).data : [];
+      if (!r.ok) out.errors = [...(out.errors || []), key + ": " + (await r.text()).slice(0, 200)];
+    }));
+    try { out.connections = await this.connections(); } catch (e) { out.connections = []; (out.errors ||= []).push("connections: " + e.message); }
+    // connections: archived days under the live ~31 days
+    const live = new Set(out.connections.map((c) => c.day));
+    out.archive = [...(await this.state.storage.list({ prefix: "day:" }))].map(([k, v]) => ({ day: k.slice(4), ...v }));
+    for (const a of out.archive) if (a.connections != null && !live.has(a.day)) out.connections.push({ day: a.day, requests: a.connections, peak: a.cfPeak || 0 });
+    return Response.json(out, { headers: { "Cache-Control": "no-store" } });
+  }
+
+  // ---- message wall ----
+  async notes(req) {
+    const url = new URL(req.url);
+    const ip = req.headers.get("CF-Connecting-IP") || "local";
+    const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
+    const del = url.pathname.replace("%3A", ":").match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})$/);
+    if (req.method === "GET" && url.pathname === "/api/notes") {
+      const before = /^note:\d{15}-[a-z0-9]{6}$/.test(url.searchParams.get("before") || "") ? url.searchParams.get("before") : null;
+      const page = await this.state.storage.list({ prefix: "note:", reverse: true, limit: NOTES_PAGE + 1, ...(before && { end: before }) });
+      const owner = await ownerOf(req.headers.get("X-Wall-Key"));
+      const notes = [...page].slice(0, NOTES_PAGE).map(([id, n]) => shown(id, n, owner));
+      return json({ notes, more: page.size > NOTES_PAGE, total: await this.noteCount() });
+    }
+    if (req.method === "POST" && url.pathname === "/api/notes") {
+      // the body is read before any check, so nothing awaits between the rate check and its write
+      // (two requests at once from one IP can't both pass)
+      const bytes = req.headers.get("Content-Length");
+      if (!bytes || !(Number(bytes) <= NOTE_BYTES)) return json({ error: "note too long" }, 413);
+      let m;
+      try { m = JSON.parse(await req.text()); } catch { return json({ error: "bad request" }, 400); }
+      const raw = cleanNote(m?.text);
+      if (!raw) return json({ error: "write something first" }, 400);
+      if (hasLink(raw)) return json({ error: "links are not allowed on the wall" }, 400);
+      const text = cleanChat(raw);
+      if (text === null) return json({ error: "note blocked" }, 400);
+      let name = cleanText(m.name, 16) || "trainer";
+      if (badName(name) || /admin|moderador|moderator|staff/.test(normalize(name))) name = "trainer";
+      const at = Date.now();
+      const lastKey = "note-at:" + ip;
+      const [ban, last, count] = await Promise.all([this.state.storage.get("ban:" + ip), this.state.storage.get(lastKey), this.noteCount()]);
+      if (ban > at) return json({ error: "you are banned" }, 403);
+      const wait = (last || 0) + NOTE_EVERY_MS - at;
+      if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)} s for the next note` }, 429);
+      const owner = await ownerOf(m.key);
+      const note = { name, gender: gender(m.gender), text, at, color: NOTE_COLORS.includes(m.color) ? m.color : "cream", ...(owner && { owner }) };
+      const id = `note:${String(at).padStart(15, "0")}-${crypto.randomUUID().replace(/-/g, "").slice(0, 6)}`;
+      await this.state.storage.put({ [id]: note, [lastKey]: at, "note-count": count + 1 });
+      this.broadcast({ t: "note", note: shown(id, note), total: count + 1 });
+      return json({ note: shown(id, note, owner), total: count + 1 });
+    }
+    // the writer edits their own note: same cleaning as a new one, and a short wait between edits
+    if (req.method === "PATCH" && del) {
+      const bytes = req.headers.get("Content-Length");
+      if (!bytes || !(Number(bytes) <= NOTE_BYTES)) return json({ error: "note too long" }, 413);
+      let m;
+      try { m = JSON.parse(await req.text()); } catch { return json({ error: "bad request" }, 400); }
+      const owner = await ownerOf(m?.key);
+      const raw = cleanNote(m?.text);
+      if (!raw) return json({ error: "write something first" }, 400);
+      if (hasLink(raw)) return json({ error: "links are not allowed on the wall" }, 400);
+      const text = cleanChat(raw);
+      if (text === null) return json({ error: "note blocked" }, 400);
+      const now = Date.now();
+      const [ban, note] = await Promise.all([this.state.storage.get("ban:" + ip), this.state.storage.get(del[1])]);
+      if (ban > now) return json({ error: "you are banned" }, 403);
+      if (!note) return json({ error: "this note is gone" }, 404);
+      if (!owner || !note.owner || !equal(owner, note.owner)) return json({ error: "this note is not yours" }, 403);
+      const wait = (this.noteEdits.get(ip) || 0) + NOTE_EDIT_EVERY_MS - now;
+      if (wait > 0) return json({ error: `wait ${Math.ceil(wait / 1000)} s to edit again` }, 429);
+      this.noteEdits.set(ip, now);
+      const edited = { ...note, text, color: NOTE_COLORS.includes(m.color) ? m.color : note.color, edited: now };
+      await this.state.storage.put(del[1], edited);
+      this.broadcast({ t: "note-edit", note: shown(del[1], edited) });
+      return json({ note: shown(del[1], edited, owner) });
+    }
+    // Notes from before wall keys existed belong to nobody. The admin can take one (it becomes theirs to edit):
+    // the only way left to tell whose it was is to ask, and the admin is who gets asked.
+    const claim = url.pathname.replace("%3A", ":").match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})\/claim$/);
+    if (req.method === "POST" && claim) {
+      const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
+      if (!check.ok) return json({ error: check.msg }, 401);
+      const owner = await ownerOf(req.headers.get("X-Wall-Key"));
+      const note = await this.state.storage.get(claim[1]);
+      if (!note) return json({ error: "this note is gone" }, 404);
+      if (!owner) return json({ error: "bad request" }, 400);
+      if (note.owner) return json({ error: "this note already has an owner" }, 409);
+      await this.state.storage.put(claim[1], { ...note, owner });
+      return json({ note: shown(claim[1], { ...note, owner }, owner) });
+    }
+    if (req.method === "DELETE" && del) {
+      // the writer (their wall key) or the admin (password, same lockout as everywhere)
+      const owner = await ownerOf(req.headers.get("X-Wall-Key"));
+      const note = owner && (await this.state.storage.get(del[1]));
+      if (!(note?.owner && equal(owner, note.owner))) {
+        if (owner && !req.headers.get("Authorization")) return json({ error: "this note is not yours" }, 403);
+        const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
+        if (!check.ok) return json({ error: check.msg }, 401);
+      }
+      let total = await this.noteCount();
+      if (await this.state.storage.delete(del[1])) await this.state.storage.put("note-count", (total = Math.max(0, total - 1)));
+      this.broadcast({ t: "note-del", id: del[1], total });
+      return json({ ok: true });
+    }
+    return json({ error: "not found" }, 404);
+  }
+  // how many notes the wall holds (kept beside them, so nobody has to list them all)
+  async noteCount() {
+    let n = await this.state.storage.get("note-count");
+    if (n == null) await this.state.storage.put("note-count", (n = (await this.state.storage.list({ prefix: "note:" })).size));
+    return n;
+  }
+
+  async sql(query) {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${this.env.CF_ACCOUNT_ID}/analytics_engine/sql`, {
+      method: "POST", headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}` }, body: query,
+    });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 200));
+    return (await r.json()).data;
+  }
+
+  async connections() {
+    const since = new Date(Date.now() - 31 * 864e5).toISOString().slice(0, 10);
+    const r = await fetch("https://api.cloudflare.com/client/v4/graphql", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.env.CF_API_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ query: CONNECTIONS_QUERY, variables: { account: this.env.CF_ACCOUNT_ID, since } }),
+    });
+    const body = await r.json();
+    if (body.errors?.length) throw new Error(body.errors[0].message.slice(0, 200));
+    const acc = body.data.viewer.accounts[0];
+    const days = new Map();
+    for (const x of acc.workersInvocationsAdaptive) days.set(x.dimensions.date, { day: x.dimensions.date, requests: x.sum.requests, peak: 0 });
+    for (const x of acc.durableObjectsPeriodicGroups) {
+      const d = days.get(x.dimensions.date) || { day: x.dimensions.date, requests: 0, peak: 0 };
+      d.peak = Math.max(d.peak, x.max.activeWebsocketConnections);
+      days.set(d.day, d);
+    }
+    return [...days.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
+  }
+
+  // daily cron: keep every finished day (of the last 80) in storage, forever
+  async archive() {
+    // the wall's "last note" marks are only needed for a minute: don't keep IPs around
+    const marks = await this.state.storage.list({ prefix: "note-at:" });
+    const stale = [...marks].filter(([, at]) => at < Date.now() - NOTE_EVERY_MS).map(([k]) => k);
+    for (let i = 0; i < stale.length; i += 128) await this.state.storage.delete(stale.slice(i, i + 128));
+    if (!this.env.CF_ACCOUNT_ID || !this.env.CF_API_TOKEN) return;
+    // Cloudflare's own count only goes ~31 days back, so it is archived too
+    const today = new Date().toISOString().slice(0, 10);
+    for (const c of await this.connections().catch(() => [])) {
+      if (c.day >= today) continue;
+      const key = "day:" + c.day;
+      const saved = (await this.state.storage.get(key)) || {};
+      if (saved.connections == null) await this.state.storage.put(key, { ...saved, connections: c.requests, cfPeak: c.peak });
+    }
+    for (let i = 80; i >= 1; i--) {
+      const day = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
+      const saved = (await this.state.storage.get("day:" + day)) || {};
+      if (saved.joins != null) continue;
+      const rows = await this.sql(dayQuery(day));
+      if (!rows.length) continue;
+      const by = Object.fromEntries(rows.map((r) => [r.event, r]));
+      const joins = Number(by.join?.n || 0), leaves = Number(by.leave?.n || 0);
+      await this.state.storage.put("day:" + day, {
+        ...saved, joins, visitors: Number(by.join?.visitors || 0), peak: Number(by.join?.peak || 0),
+        avgSeconds: leaves ? Number(by.leave.seconds) / leaves : 0, messages: Number(by.chat?.n || 0),
+      });
+    }
+  }
+
   async fetch(req) {
+    const path = new URL(req.url).pathname;
+    if (path === "/api/stats") return this.stats(req);
+    if (path.startsWith("/api/notes")) return this.notes(req);
+    if (path === "/internal/archive") { await this.archive(); return new Response("ok"); }
     if (req.headers.get("Upgrade") !== "websocket") return new Response("expected websocket", { status: 426 });
     if (this.state.getWebSockets().length >= MAX_PLAYERS) return new Response("room is full", { status: 503 });
     const ip = req.headers.get("CF-Connecting-IP") || "local";
@@ -99,7 +385,8 @@ export class Room {
     // hibernation: the DO can sleep with connections open; each player's
     // state lives on its own socket (serializeAttachment)
     this.state.acceptWebSocket(server);
-    server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, seat: -1, ip });
+    server.serializeAttachment({ id, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, seat: -1, ip,
+      country: String(req.cf?.country || "").slice(0, 2), visitor: await visitorOf(ip) });
     server.send(JSON.stringify({ t: "you", id }));
     const radio = await this.state.storage.get("radio");
     if (radio) server.send(JSON.stringify({ t: "radio", command: radio }));
@@ -111,7 +398,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
   }
   players() {
     return this.state.getWebSockets().map((ws) => ws.deserializeAttachment()).filter(Boolean).map((p) => this.public(p));
@@ -163,7 +450,10 @@ export class Room {
       p.x = number(m.x);
       p.z = number(m.z);
       p.dir = DIRS.includes(m.dir) ? m.dir : "down";
+      const first = !p.joinedAt;
+      if (first) p.joinedAt = Date.now();
       ws.serializeAttachment(p);
+      if (first) this.stat("join", p);
       this.broadcast({ t: "joined", player: this.public(p) }, ws);
       await this.rememberName(p);
     } else if (m.t === "gender") {
@@ -194,6 +484,11 @@ export class Room {
       ws.serializeAttachment(p);
       // not back to the sender: it already moved, and a late echo would undo a quick sit/stand
       this.broadcast({ t: "seat", id: p.id, seat }, ws);
+    } else if (m.t === "hold") {
+      // what the player holds on a bench; the client only draws it on someone seated
+      p.hold = [1, 2].includes(m.item) ? m.item : 0;
+      ws.serializeAttachment(p);
+      this.broadcast({ t: "hold", id: p.id, item: p.hold }, ws);
     } else if (m.t === "auth") {
       if (!(await this.isAdmin(ws, p, m.password))) return;
       // everyone sees who the admin is (badge over the name, colour in the chat)
@@ -231,6 +526,7 @@ export class Room {
       s.lastAt = now;
       const msg = { id: p.id, name: p.name, text, at: now, ...(p.admin && { admin: true }) };
       this.broadcast({ t: "chat", ...msg });
+      this.stat("chat", p);
       await this.saveHistory([...(await this.history()), msg]);
     }
   }
@@ -248,23 +544,24 @@ export class Room {
 
   // failures counted per IP in storage, so reconnecting doesn't reset them
   async isAdmin(ws, p, password) {
+    const check = await this.checkAdmin(p.ip, password);
+    if (!check.ok) ws.send(JSON.stringify({ t: "error", msg: check.msg }));
+    return check.ok;
+  }
+  async checkAdmin(ip, password) {
     // bump the "v3" prefix to drop every stored lock
-    const lockKey = "admin-fail-v3:" + p.ip;
+    const lockKey = "admin-fail-v3:" + ip;
     const lock = (await this.state.storage.get(lockKey)) || { fails: 0, until: 0 };
-    if (lock.until > Date.now()) {
-      ws.send(JSON.stringify({ t: "error", msg: "admin locked, try later" }));
-      return false;
-    }
+    if (lock.until > Date.now()) return { ok: false, msg: "admin locked, try later" };
     if (!this.env.ADMIN_PASSWORD || typeof password !== "string" || !equal(password, this.env.ADMIN_PASSWORD)) {
       lock.fails = lock.until ? 1 : lock.fails + 1; // a finished lock starts over
       lock.until = lock.fails >= ADMIN_ATTEMPTS ? Date.now() + ADMIN_LOCK_MS : 0;
       if (lock.until) lock.fails = 0;
       await this.state.storage.put(lockKey, lock);
-      ws.send(JSON.stringify({ t: "error", msg: "invalid admin password" }));
-      return false;
+      return { ok: false, msg: "invalid admin password" };
     }
     await this.state.storage.delete(lockKey);
-    return true;
+    return { ok: true };
   }
 
   // kick / ban a player by id: everyone on that player's IP loses the room
@@ -357,14 +654,33 @@ export class Room {
   leave(ws) {
     const p = ws.deserializeAttachment();
     if (!p) return;
+    if (p.joinedAt) this.stat("leave", p, [Math.round((Date.now() - p.joinedAt) / 1000)]);
     for (const k of this.buckets.keys()) if (k.startsWith(p.id + "|")) this.buckets.delete(k);
     this.broadcast({ t: "left", id: p.id }, ws);
   }
 }
 
 export default {
+  // once a day: archive yesterday's numbers in the room's storage (see Room.archive)
+  async scheduled(event, env) {
+    await env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch("https://room/internal/archive");
+  },
   async fetch(req, env) {
     const url = new URL(req.url);
+    // stats: the room's Durable Object checks the admin password (same lockout as the game)
+    if (url.pathname === "/api/stats") {
+      if (req.method !== "GET") return new Response("method not allowed", { status: 405 });
+      return env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch(req);
+    }
+    // message wall: writes only from the site itself (same origin check as the WebSocket)
+    if (url.pathname === "/api/notes" || url.pathname.startsWith("/api/notes/")) {
+      if (req.method !== "GET") {
+        const origin = req.headers.get("Origin");
+        const ok = [url.origin, ...(env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean)];
+        if (!origin || !ok.includes(origin)) return new Response("origin not allowed", { status: 403 });
+      }
+      return env.ROOM.get(env.ROOM.idFromName(ROOMS[0])).fetch(req);
+    }
     // /ws/<room>  ->  that room's Durable Object. Everything else is the static site (assets).
     const m = url.pathname.match(/^\/ws\/([a-z0-9-]{1,32})$/i);
     if (!m) return env.ASSETS ? env.ASSETS.fetch(req) : new Response("lofi-lobby", { status: 404 });

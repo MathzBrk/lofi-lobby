@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
+import { createBoard, setupWall } from "./board.js";
 
 // ---- Asset config (change here to use other files) ----
 const TOWN = {
@@ -229,7 +230,12 @@ function prepareTown(fbx) {
         solidBoxes.push(new THREE.Box3().setFromObject(o));
     });
     placeLampPairs();
+    applyLook(dayAmount); // the pond pair's softer light
+    candles.position.y = groundHeight(candles.position.x, candles.position.z);
+    candles.updateMatrixWorld(true);
+    solidBoxes.push(new THREE.Box3().setFromObject(candles).expandByScalar(0.15)); // nobody steps on them: a very small gap around
     placeBenches();
+    board.position.y = groundHeight(board.position.x, board.position.z);
 }
 
 // ---- Original village (default on the published site) ----
@@ -459,11 +465,15 @@ function createLampPost(x, z) {
 const LAMP_POSTS = [
   [-6, -14],
   [6, -14],
-  [-6, 24],
-  [6, 24],
+  [-10.5, 24], // at the two ends of the pond, with the two benches between them
+  [10.5, 24],
 ];
 const lampPosts = LAMP_POSTS.map(([x, z]) => createLampPost(x, z));
 const lampPostSolids = lampPosts.flatMap((p) => p.children.filter((c) => c.isMesh));
+// message wall: a cork board under the lamp light, in front of the lower-left house's window
+const BOARD_AT = [-7.5, 15];
+const board = createBoard(scene);
+board.position.set(BOARD_AT[0], 0, BOARD_AT[1]);
 
 // ---- Benches ----
 // Built in code (no new art), two seats each, facing the road. A seat is numbered
@@ -521,9 +531,11 @@ function placeBenches() {
   const clear = (x, z) =>
     isOpen(x, z, 2.6) &&
     benches.every((b) => Math.hypot(b.x - x, b.z - z) > 6) &&
-    lampPosts.every((l) => Math.hypot(l.position.x - x, l.position.z - z) > 4.5);
-  for (const [x0, z0, face] of BENCH_SPOTS)
-    search: for (let r = 0; r <= 8; r += 0.5)
+    lampPosts.every((l) => Math.hypot(l.position.x - x, l.position.z - z) > 4.5) &&
+    Math.hypot(board.position.x - x, board.position.z - z) > 7; // keep clear of the message board
+  for (const [x0, z0, face, exact] of BENCH_SPOTS)
+    if (exact) createBench(x0, groundHeight(x0, z0), z0, face);
+    else search: for (let r = 0; r <= 8; r += 0.5)
       for (let a = 0; a < 16; a++) {
         const x = x0 + Math.cos((a / 16) * Math.PI * 2) * r;
         const z = z0 + Math.sin((a / 16) * Math.PI * 2) * r;
@@ -534,12 +546,13 @@ function placeBenches() {
         if (r === 0) break; // the center has only one point to try
       }
 }
-// Wished spots and facing (tweak freely). Side benches ("right"/"left") stand on the edge of
+// Wished spots and facing (tweak freely); a spot marked true is used as is, the others move to the nearest open ground. Side benches ("right"/"left") stand on the edge of
 // a path, so whoever sits is on the path's line. Skip the gaps between the back and front houses:
 // the front roofs hide anything there from the camera.
 const BENCH_SPOTS = [
-  [-8, 18.5, "down"], // sand path in front of the houses, middle
-  [12, 18.5, "down"], // sand path in front of the houses, right
+  // two on the grass tile in front of the pond, between the lamps at its ends, looking at the water (placed as is)
+  [-4, 23, "down", true],
+  [4, 23, "down", true],
   [-23, 18.5, "right"], // left end of the sand path in front of the houses
   [-4.5, -23.7, "right"], // back of the road, by the big house on the left
   [3, -29, "left"], // right edge of the road at the very back, past the houses
@@ -583,6 +596,30 @@ for (const k in LOOK)
   if (typeof LOOK[k][0] === "string") LOOK[k] = LOOK[k].map((c) => new THREE.Color(c));
 const lampLights = lampPosts.flatMap((p) => p.children.filter((c) => c.isPointLight));
 const lampGlows = lampPosts.flatMap((p) => p.children.filter((c) => c.isSprite));
+// A few candles on the grass between the two pond benches, so sitters aren't in the dark (the posts
+// are far, at the pond's ends): chunky square wax stubs of different heights, small flames, and a
+// very faint warm light that wavers. No shadows, and out by day with the lamps.
+const candles = new THREE.Group();
+const candleFlames = [];
+{
+  const wax = new THREE.MeshLambertMaterial({ color: "#efe3c4", emissive: "#8a7650" }); // lit from inside by its own flame
+  const fire = new THREE.MeshBasicMaterial({ color: "#ffd27a" });
+  // [x, z, height]
+  for (const [x, z, h] of [[-0.5, 0.1, 0.6], [0.4, -0.2, 0.95], [0.15, 0.55, 0.4]]) {
+    const stub = new THREE.Mesh(new THREE.BoxGeometry(0.36, h, 0.36), wax);
+    stub.position.set(x, h / 2, z);
+    const flame = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.3, 0.16), fire);
+    flame.position.set(x, h + 0.2, z);
+    candles.add(stub, flame);
+    candleFlames.push(flame);
+  }
+}
+const benchGlow = new THREE.PointLight("#ffb14a", 0, 10, 1.6);
+benchGlow.position.y = 1.1;
+let candleLight = 0; // steady strength; the flicker plays around it each frame
+candles.add(benchGlow);
+candles.position.set(0, 0, 23.6);
+scene.add(candles);
 const mixNum = ([a, b], t) => a + (b - a) * t;
 const mixColor = (target, [a, b], t) => target.copy(a).lerp(b, t);
 const OVERCAST_SKY = new THREE.Color("#7d8794");
@@ -595,17 +632,20 @@ function applyLook(t) {
   const overcast = rainAmount * t;
   scene.background.lerp(OVERCAST_SKY, 0.65 * overcast);
   scene.fog.color.copy(scene.background);
-  // rain closes the fog in
-  scene.fog.near = 50 - 12 * rainAmount;
-  scene.fog.far = 140 - 22 * rainAmount;
+  // rain closes the fog in; at night it is always closed in, rain or not, so the town stays
+  // dark around the lamps' pools of light
+  const closed = Math.max(rainAmount, 1 - t);
+  scene.fog.near = 50 - 12 * closed;
+  scene.fog.far = 140 - 22 * closed;
   mixColor(skyLight.color, LOOK.skyTop, t);
   skyLight.color.lerp(OVERCAST_LIGHT, 0.5 * overcast);
   mixColor(skyLight.groundColor, LOOK.skyGround, t);
-  const gloom = 1 - (0.2 + 0.2 * t) * rainAmount;
+  const gloom = 1 - (0.2 + 0.2 * t) * closed;
   skyLight.intensity = mixNum(LOOK.skyIntensity, t) * gloom;
   mixColor(sun.color, LOOK.sunColor, t);
   sun.intensity = mixNum(LOOK.sunIntensity, t) * gloom;
-  for (const l of lampLights) l.intensity = mixNum(LOOK.lampIntensity, t);
+  for (const l of lampLights) l.intensity = mixNum(LOOK.lampIntensity, t) * (l.userData.dim ?? 1);
+  candleLight = mixNum(LOOK.lampIntensity, t) * 0.06;
   for (const g of lampGlows) g.material.opacity = mixNum(LOOK.glowOpacity, t);
   mixColor(lightMaterial.color, LOOK.lantern, t);
   mixColor(waterMaterial.color, LOOK.waterColor, t);
@@ -960,16 +1000,19 @@ function placeLampPairs() {
     const a = lampPosts[i],
       b = lampPosts[i + 1];
     const z0 = a.position.z;
+    // a pair asked for farther out (the pond's ends) keeps that distance instead of hugging the road
+    const wide = Math.abs(a.position.x - ROAD_CENTER_X);
+    const [offMax, offMin] = wide > OFFSET + 1 ? [wide, wide - 1] : [OFFSET, OFFSET_MIN];
     // first try moving closer to the road (out from under roof eaves);
     // only slide along the road if it doesn't fit even close to it
     const fits = (off, z) =>
       isOpen(ROAD_CENTER_X - off, z, 2.4) &&
       (!b || isOpen(ROAD_CENTER_X + off, z, 2.4));
     let zOk = z0,
-      offOk = OFFSET;
+      offOk = offMax;
     search: for (let d = 0; d <= 16; d += 0.5) {
       for (const z of [z0 + d, z0 - d]) {
-        for (let off = OFFSET; off >= OFFSET_MIN; off -= 0.25) {
+        for (let off = offMax; off >= offMin; off -= 0.25) {
           if (fits(off, z)) {
             zOk = z;
             offOk = off;
@@ -977,6 +1020,12 @@ function placeLampPairs() {
           }
         }
       }
+    }
+    if (wide > OFFSET + 1 && b) {
+      // far apart, the two face each other: the right one turns its arm (and its light) inward too,
+      // so their shadows fall the same way on both sides; a little softer, being close to the benches
+      b.rotation.y = Math.PI;
+      for (const post of [a, b]) post.children.find((c) => c.isPointLight).userData.dim = 0.7;
     }
     a.position.set(
       ROAD_CENTER_X - offOk,
@@ -1034,6 +1083,7 @@ function isFree(x, z, currentY) {
     inPond(x, z + BODY_RADIUS)
   )
     return false;
+  if (Math.abs(x - board.position.x) < 3.8 + BODY_RADIUS * 0.5 && Math.abs(z - board.position.z) < 0.5 + BODY_RADIUS * 0.5) return false;
   for (const p of lampPosts)
     if (
       Math.hypot(p.position.x - x, p.position.z - z) <
@@ -1307,39 +1357,57 @@ function setFrame(dir, step, running = false) {
 // walls/roofs behind it). If something is in front, it occludes normally.
 // Every sprite pixel uses the depth of the FEET (pulled slightly forward):
 // whatever is in front of the feet covers the whole body; whatever is behind never cuts it.
-sprite.renderOrder = 10;
-const feetUniforms = { uFeet: { value: new THREE.Vector3() } };
-sprite.material.depthTest = true;
-sprite.material.depthWrite = true;
-sprite.material.onBeforeCompile = (shader) => {
-  shader.uniforms.uFeet = feetUniforms.uFeet;
-  shader.vertexShader = shader.vertexShader
-    .replace("#include <common>", "#include <common>\nuniform vec3 uFeet;")
-    .replace(
-      "#include <project_vertex>",
-      `#include <project_vertex>
+// Every trainer does this the same way (yours and the others'), so between two trainers the one
+// whose feet are nearer the camera is always the one in front, from head to toe.
+function useFeetDepth(mesh, feet = new THREE.Vector3(), order = 10) {
+  const uFeet = { value: feet };
+  mesh.renderOrder = order;
+  mesh.material.depthTest = true;
+  mesh.material.depthWrite = true;
+  mesh.material.onBeforeCompile = (shader) => {
+    shader.uniforms.uFeet = uFeet;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nuniform vec3 uFeet;")
+      .replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
 vec4 feetClip = projectionMatrix * viewMatrix * vec4(uFeet, 1.0);
 gl_Position.z = (feetClip.z / feetClip.w) * gl_Position.w;`,
-    );
-};
+      );
+  };
+  return uFeet.value;
+}
+const myFeet = useFeetDepth(sprite);
+const _toCam = new THREE.Vector3();
 const occlusionRay = new THREE.Ray();
 const _hit = new THREE.Vector3();
-function updateOcclusion() {
-  // reference point: the feet, pulled a bit toward the camera
-  const feet = new THREE.Vector3(pos.x, pos.y + 0.2, pos.z);
+// reference point for a trainer standing at (x, y, z): the feet, pulled a bit toward the camera
+function setFeet(feet, x, y, z) {
+  feet.set(x, y + 0.2, z);
   // 2.4: covers the body height seen from above (tops of objects right behind
   // are closer to the camera than the feet). Smaller = objects behind cut the head;
   // larger = the sprite starts drawing over things that are in front of it.
-  const toCam = camera.position.clone().sub(feet).normalize();
-  // ...but never past a bench in front of you, or you'd be drawn over it while behind it
-  let pull = 2.4;
-  occlusionRay.set(feet, toCam);
+  _toCam.copy(camera.position).sub(feet).normalize();
+  // the message board is thin, so right behind it the full margin would put the feet in front of it:
+  // there the margin shrinks to what fits between the feet and the board's back
+  let margin = 2.4;
+  // ...and never past a bench in front of you, or you'd be drawn over it while behind it
+  occlusionRay.set(feet, _toCam);
   for (const box of benchBoxes) {
     if (box.containsPoint(feet)) continue; // sitting on it (side benches)
-    const hit = occlusionRay.intersectBox(box, _hit);
-    if (hit) pull = Math.min(pull, Math.max(0, feet.distanceTo(hit) - 0.1));
+    if (occlusionRay.intersectBox(box, _hit)) margin = Math.min(margin, Math.max(0, feet.distanceTo(_hit) - 0.1));
   }
-  feetUniforms.uFeet.value.copy(feet.addScaledVector(toCam, pull));
+  // (the same for the candles on the grass, which are small and low)
+  for (const [thing, halfWidth] of [[board, 5], [candles, 1.6]]) {
+    const behind = thing.position.z - z;
+    if (behind > 0 && Math.abs(x - thing.position.x) < halfWidth)
+      margin = Math.max(0, Math.min(margin, behind * _toCam.z - 0.3));
+  }
+  feet.addScaledVector(_toCam, margin);
+}
+function updateOcclusion() {
+  setFeet(myFeet, pos.x + slide.x, pos.y, pos.z + slide.z);
+  for (const o of others.values()) setFeet(o.feet, o.mesh.position.x, o.mesh.position.y, o.mesh.position.z);
 }
 
 // ---- Movement ----
@@ -1397,6 +1465,9 @@ const releaseStick = (e) => {
 canvasEl.addEventListener("pointerup", releaseStick);
 canvasEl.addEventListener("pointercancel", releaseStick);
 const pos = new THREE.Vector3(0, 0, 0);
+// sitting or standing moves you at once; the sprite and camera glide over from where you were
+const slide = { x: 0, z: 0 };
+const glideFrom = (x, z) => ((slide.x += x - pos.x), (slide.z += z - pos.z));
 let dir = "down",
   tAnim = 0;
 // come back where you left: the position is remembered in this browser
@@ -1438,6 +1509,139 @@ const SPEED = 9;
 
 // ---- Sitting ----
 let mySeat = -1;
+
+// What you hold while sitting: nothing, a laptop on your lap or a coffee. Pixel art drawn in code
+// on the trainer's own 32px frame, on a plane that sits exactly over the trainer and takes the
+// same depth (its feet), so it is covered and uncovered together with the body.
+const HELD = ["nothing", "a laptop", "a coffee"];
+// each view: [colour, x, y, w, h, glows, puff] rectangles on the 32x32 frame, drawn for a body whose
+// middle is on column 16 (front and back views) or whose front edge is on column 22 (side view,
+// looking right); bodyShape() measures the real sprite and the art moves to fit it.
+// A rectangle with `puff` is steam: it rises and sways over the 4 frames.
+const HELD_ART = {
+  // laptop from the front: on the lap, under the chin; you see the back of the lid and its small light
+  "1down": [["#11131a", 10, 22, 13, 6], ["#3a4052", 11, 23, 11, 4], ["#565d75", 11, 23, 11, 1], ["#bfe3ff", 16, 25, 1, 1, 1], ["#23262f", 9, 28, 15, 1]],
+  // from the side: base on the knees, lid standing straight at its far end, lit screen turned to the
+  // sitter, and the hand reaching forward to rest on the keyboard ("skin" is the trainer's own skin colour)
+  "1right": [["#23262f", 18, 28, 8, 1], ["#3a4052", 18, 27, 8, 1], ["#3a4052", 25, 21, 1, 6], ["#bfe3ff", 24, 22, 1, 4, 1], ["skin", 22, 26, 3, 1]],
+  // from behind the body hides it: only the screen's light shows past the elbows
+  "1up": [["#bfe3ff", 8, 26, 1, 1, 1], ["#bfe3ff", 24, 26, 1, 1, 1]],
+  // coffee: a paper cup in one hand, steam above
+  "2down": [["#f4ead2", 21, 22, 3, 4], ["#6b4a2f", 21, 23, 3, 2], ["#ffffff", 20, 21, 5, 1], ["#e8e8ee", 22, 19, 1, 2, 1, 0], ["#e8e8ee", 22, 19, 1, 1, 1, 2]],
+  // from the side: right against the chest, below the chin, so neither the cup nor the steam crosses the face
+  "2right": [["#f4ead2", 22, 24, 3, 4], ["#6b4a2f", 22, 25, 3, 2], ["#ffffff", 21, 23, 5, 1], ["#e8e8ee", 25, 21, 1, 2, 1, 0], ["#e8e8ee", 25, 21, 1, 1, 1, 2]],
+  "2up": [["#f4ead2", 23, 23, 2, 3], ["#6b4a2f", 23, 24, 2, 1], ["#ffffff", 23, 22, 2, 1], ["#e8e8ee", 24, 19, 1, 2, 1, 0], ["#e8e8ee", 24, 19, 1, 1, 1, 2]],
+};
+const FACE_LIGHT = [0.34, 0.22, 0.4, 0.28]; // how strong the screen's light is on each frame
+const FLICKER = [0, 1, 0, 2, 3, 1, 2, 0]; // uneven, like a screen changing
+// What a trainer's standing frame looks like for one direction, read from its own sheet: the skin
+// pixels of the face (where the laptop's light falls) and how far the body is from where the art
+// expects it. Measured once per sheet and direction.
+const shapes = new Map();
+function bodyShape(tex, cfg, d) {
+  const img = tex.image;
+  if (!img || !img.width) return null; // sheet still loading
+  let bySheet = shapes.get(img);
+  if (!bySheet) shapes.set(img, (bySheet = { id: shapes.size }));
+  if (bySheet[d]) return bySheet[d];
+  const { x, y, w, h } = framePos(cfg, d, 0);
+  const cv = document.createElement("canvas");
+  cv.width = cv.height = 32;
+  const c = cv.getContext("2d", { willReadFrequently: true });
+  c.drawImage(img, x, y, w, h, 0, 0, 32, 32);
+  const px = c.getImageData(0, 0, 32, 32).data;
+  const at = (i, j) => px.subarray((j * 32 + i) * 4, (j * 32 + i) * 4 + 4);
+  const [br, bg, bb] = at(0, 0); // a sheet without transparency has its background in the corner
+  const solid = (i, j) => { const [r, g, b, a] = at(i, j); return a > 127 && !(r === br && g === bg && b === bb); };
+  const skin = (i, j) => { const [r, g, b] = at(i, j); return solid(i, j) && r > 200 && g > 140 && g < 225 && b < 190 && r - b > 40; };
+  const face = [];
+  const tone = [0, 0, 0, 0]; // r, g, b sums and how many pixels
+  let min = 32, max = -1;
+  for (let j = 0; j < 32; j++)
+    for (let i = 0; i < 32; i++) {
+      if (j >= 14 && j <= 22 && skin(i, j)) face.push([i, j]), at(i, j).forEach((v, k) => (tone[k] += k < 3 ? v : 1));
+      if (j >= 23 && j <= 26 && solid(i, j)) (min = Math.min(min, i)), (max = Math.max(max, i));
+    }
+  // hands are skin too: keep only the face, the skin above the body's first row that has none in the middle
+  const lastFaceRow = Math.max(...face.filter(([i]) => Math.abs(i - (min + max) / 2) < 3).map(([, j]) => j), 0);
+  const shift = max < 0 ? 0 : d === "right" ? max - 22 : d === "left" ? 31 - min - 22 : Math.round((min + max) / 2) - 16;
+  return (bySheet[d] = { face: face.filter(([, j]) => j <= Math.max(lastFaceRow, 21)), shift, key: "s" + bySheet.id,
+    skin: tone[3] ? `rgb(${tone.slice(0, 3).map((v) => Math.round(v / tone[3])).join(",")})` : "#f0b890" });
+}
+const heldTex = {};
+function heldTextures(item, d, shape) {
+  const tick = Math.floor(performance.now() / (item === 2 ? 320 : 260));
+  const frame = item === 2 ? tick % 4 : FLICKER[tick % 8]; // steam rising, or the screen's light
+  const key = item + d + frame + (shape?.key || "");
+  if (heldTex[key]) return heldTex[key];
+  const art = HELD_ART[item + (d === "left" ? "right" : d)] || HELD_ART[item + "down"];
+  const make = (glowOnly) => {
+    const cv = document.createElement("canvas");
+    cv.width = cv.height = 32;
+    const c = cv.getContext("2d");
+    if (glowOnly) (c.fillStyle = "#000"), c.fillRect(0, 0, 32, 32);
+    // the laptop's bluish light, only on the face's own pixels
+    if (item === 1 && shape) {
+      c.fillStyle = glowOnly ? "rgb(50,90,160)" : `rgba(110,170,255,${FACE_LIGHT[frame]})`;
+      for (const [i, j] of shape.face) c.fillRect(i, j, 1, 1);
+    }
+    if (d === "left") c.setTransform(-1, 0, 0, 1, 32, 0); // mirror the side view
+    for (const [color, x, y, w, h, glows, puff] of art) {
+      c.globalAlpha = glowOnly && !glows ? 0.3 : 1; // the rest glows a little too, to stay readable at night
+      const rise = puff === undefined ? 0 : (frame + puff) % 4; // 0..3 pixels up, then it starts again
+      c.fillStyle = color === "skin" ? shape?.skin || "#f0b890" : color;
+      c.fillRect(x + (shape?.shift || 0) + (rise % 2), y - rise, w, h);
+    }
+    const t = new THREE.CanvasTexture(cv);
+    t.magFilter = t.minFilter = THREE.NearestFilter;
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  };
+  const made = [make(false), make(true)];
+  if (shape) heldTex[key] = made; // without the sheet yet, try again next frame
+  return made;
+}
+// the plane for one trainer's item; `feet` is that trainer's depth point
+function createHeld(feet) {
+  const mesh = new THREE.Mesh(
+    characterGeo,
+    new THREE.MeshLambertMaterial({ map: glowTexture, emissiveMap: glowTexture, emissive: 0xffffff, emissiveIntensity: 0.9, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide }),
+  );
+  mesh.scale.set(5, 5, 1);
+  mesh.visible = false;
+  useFeetDepth(mesh, feet, 11); // right after the trainer, at the same depth
+  scene.add(mesh);
+  return mesh;
+}
+// put the item over its trainer (or hide it when not seated or holding nothing)
+function showHeld(mesh, body, cfg, item, seat) {
+  mesh.visible = !!(item && seat);
+  if (!mesh.visible) return;
+  const shape = bodyShape(body.material.map, cfg, seat.dir);
+  if (!shape) return void (mesh.visible = false);
+  [mesh.material.map, mesh.material.emissiveMap] = heldTextures(item, seat.dir, shape);
+  mesh.position.copy(body.position);
+  mesh.rotation.copy(body.rotation);
+}
+const myHeld = createHeld(myFeet);
+let myHold = 0;
+try { myHold = [1, 2].includes(+localStorage.getItem("hold")) ? +localStorage.getItem("hold") : 0; } catch {}
+const sendHold = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "hold", item: myHold }));
+const holdBtn = document.querySelector("#hold");
+let lastHold = 0;
+function cycleHold() {
+  const now = performance.now();
+  if (gamePaused || mySeat < 0 || now - lastHold < 350) return; // stays under the server's rate limit
+  lastHold = now;
+  myHold = (myHold + 1) % 3;
+  try { localStorage.setItem("hold", myHold); } catch {}
+  sendHold();
+}
+holdBtn.addEventListener("click", (e) => {
+  cycleHold();
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+
 // each sit/stand is numbered and the server's corrections carry the number back, so a late
 // answer to an older request can't stand you up from the seat you have now
 let sitN = 0;
@@ -1458,32 +1662,41 @@ function sit(id) {
   const s = seatSpot(id);
   if (!s) return;
   mySeat = id;
+  const [ox, oz] = [pos.x, pos.z];
   pos.set(s.x, s.y, s.z);
+  glideFrom(ox, oz);
   dir = s.dir;
   sendSeat();
 }
-// Stand up on the nearest free spot around the bench, starting from its front, then tell the room
-function standUp(notify = true) {
+// Stand up on the nearest free spot around the bench, starting from the way you walked off
+// (or its front), then tell the room
+function standUp(notify = true, way = null) {
   const s = seatSpot(mySeat);
+  const side = mySeat & 1 ? 1 : -1;
   mySeat = -1;
   if (s) {
     const [fx, fz] = FACING[s.dir];
-    const front = Math.atan2(fz, fx);
+    // walking toward the other seat (across the bench) gets you off its front instead
+    if (way && way[0] * fz * side - way[1] * fx * side > 0.7 * Math.hypot(way[0], way[1])) (way = null), (dir = s.dir);
+    const front = way ? Math.atan2(way[1], way[0]) : Math.atan2(fz, fx);
     const ground = groundHeight(s.x, s.z);
     search: for (let d = 2.4; d <= 7; d += 0.4)
       for (let i = 0; i < 16; i++) {
-        // front first, then alternating to each side, back last
+        // that way first, then alternating to each side, the opposite way last
         const a = front + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 8);
         const x = s.x + Math.cos(a) * d,
           z = s.z + Math.sin(a) * d;
         if (isFree(x, z, ground)) {
+          const [ox, oz] = [pos.x, pos.z];
           pos.set(x, ground, z);
+          glideFrom(ox, oz);
           break search;
         }
       }
   }
   if (notify) sendSeat();
 }
+const MOVE_KEYS = { w: "up", arrowup: "up", s: "down", arrowdown: "down", a: "left", arrowleft: "left", d: "right", arrowright: "right" };
 // at most one sit or stand per SIT_COOLDOWN ms, so mashing E stays under the server's rate limit
 const SIT_COOLDOWN = 350;
 let lastToggle = 0;
@@ -1502,9 +1715,14 @@ sitBtn.addEventListener("click", (e) => {
 addEventListener("keydown", (e) => {
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
   const k = e.key.toLowerCase();
-  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "e") toggleSit();
+  // by the message board, E opens it (unless you're seated: then it stands you up)
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "q") cycleHold();
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "e") (mySeat >= 0 || !nearBoard()) && toggleSit();
   // a quick tap on a move key can end before the next frame: stand up right away
-  else if (!typing && !gamePaused && mySeat >= 0 && ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) standUp();
+  else if (!typing && !gamePaused && mySeat >= 0 && MOVE_KEYS[k]) {
+    dir = MOVE_KEYS[k];
+    standUp(true, FACING[dir]);
+  }
 });
 // respawn asks for a second click, so a curious click doesn't teleport you
 let respawnTimer = 0;
@@ -1638,12 +1856,14 @@ function createOther(p) {
   scene.add(mesh);
   const o = {
     mesh,
+    feet: useFeetDepth(mesh),
     tex,
     cfg: available ? CROP[g] : GRID,
     target: new THREE.Vector3(p.x, 0, p.z),
     dir: p.dir || "down",
     step: p.step || 0,
     seat: Number.isInteger(p.seat) ? p.seat : -1,
+    hold: p.hold | 0,
     name: p.name,
     admin: !!p.admin,
   };
@@ -1656,6 +1876,7 @@ function removeOther(id) {
   const o = others.get(id);
   if (!o) return;
   scene.remove(o.mesh);
+  if (o.held) scene.remove(o.held), o.held.material.dispose();
   o.tex.dispose();
   others.delete(id);
   updateCount();
@@ -1675,6 +1896,7 @@ function connect() {
   ws.onopen = () => {
     ws.send(JSON.stringify({ t: "hello", name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
+    if (myHold) sendHold();
     // a saved admin logs in again quietly, so everyone sees the admin badge
     let password = "";
     try { password = localStorage.getItem("admin-password") || ""; } catch {}
@@ -1694,6 +1916,9 @@ function connect() {
       elMsgs.scrollTop = elMsgs.scrollHeight;
     }
     else if (m.t === "radio") receiveCommand(m.command);
+    else if (m.t === "note") wall.onNote(m.note, m.total);
+    else if (m.t === "note-edit") wall.onNoteEdited(m.note);
+    else if (m.t === "note-del") wall.onNoteDeleted(m.id, m.total);
     else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
     else if (m.t === "rename") {
       // the server refused our name and gave us another one
@@ -1738,6 +1963,9 @@ function connect() {
         removeOther(m.id);
         createOther(p);
       }
+    } else if (m.t === "hold") {
+      const o = others.get(m.id);
+      if (o) o.hold = m.item | 0;
     } else if (m.t === "seat") {
       // the server says who sits where. About you, it only answers a refused or dropped sit:
       // you're not on the seat you asked for, so stand up; or the room still has you seated
@@ -1804,6 +2032,7 @@ function updateOthers(dt) {
     } else m.position.y = topHeight(m.position.x, m.position.z);
     m.rotation.copy(sprite.rotation);
     setFrameTex(o.tex, o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
+    if (o.held || (o.hold && seat)) showHeld((o.held ??= createHeld(o.feet)), m, o.cfg, o.hold, seat);
   }
 }
 
@@ -2030,11 +2259,42 @@ elInput.addEventListener("focus", () => {
 });
 elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePlaceholder));
 
+// ---- Message wall ----
+const wall = setupWall({ getName: () => NAME, getGender: () => GENDER, isAdmin: () => IS_ADMIN });
+const wallBtn = document.querySelector("#wall-btn");
+wallBtn.addEventListener("click", (e) => { e.currentTarget.blur(); wall.show(); });
+// near the board: a prompt over it ("E" or tap to read)
+const wallPrompt = Object.assign(document.createElement("button"), { id: "wall-prompt", type: "button" });
+wallPrompt.innerHTML = MOBILE ? "tap to read the wall" : "<kbd>E</kbd> read the wall";
+wallPrompt.addEventListener("click", () => wall.show());
+document.body.append(wallPrompt);
+const nearBoard = () => Math.hypot(pos.x - board.position.x, pos.z - board.position.z - 1) < wall.NEAR;
+addEventListener("keydown", (e) => {
+  if (typing() || e.repeat || gamePaused || e.metaKey || e.ctrlKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if ((k === "e" && nearBoard()) || k === "b") wall.show();
+});
+function updateWallPrompt() {
+  const show = nearBoard() && !wall.isOpen() && !gamePaused;
+  wallPrompt.classList.toggle("on", show);
+  if (!show) return;
+  _v.set(board.position.x, board.position.y + 7.4, board.position.z).project(camera);
+  wallPrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
+  wallPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
+}
+
 function loop() {
   const dt = Math.min(clock.getDelta(), 0.05);
   checkSavedPosition();
   savePosition(performance.now());
   waterUniforms.uTime.value += dt;
+  // candles: the light and the flames waver a little
+  const waver = 0.85 + 0.15 * Math.sin(waterUniforms.uTime.value * 9) * Math.sin(waterUniforms.uTime.value * 5.3);
+  benchGlow.intensity = candleLight * waver;
+  candleFlames.forEach((f, i) => {
+    f.visible = candleLight > 0.01;
+    f.scale.y = 1 + 0.25 * Math.sin(waterUniforms.uTime.value * (11 + i * 3) + i);
+  });
   const dayTarget = isDay ? 1 : 0;
   if (dayAmount !== dayTarget) {
     dayAmount += Math.sign(dayTarget - dayAmount) * Math.min(dt, Math.abs(dayTarget - dayAmount));
@@ -2065,12 +2325,12 @@ function loop() {
     // facing follows the stronger axis
     dir = Math.abs(dx) > Math.abs(dz) ? (dx > 0 ? "right" : "left") : dz > 0 ? "down" : "up";
   }
-  if (gamePaused) {
+  if (gamePaused || wall.isOpen()) {
     dx = 0;
     dz = 0;
   }
   const run = keys.shift || stick.mag > 0.9;
-  if (mySeat >= 0 && (dx || dz)) standUp(); // any move key gets you up
+  if (mySeat >= 0 && (dx || dz)) standUp(true, [dx, dz]); // any move key gets you up, off that way
   const walking = dx || dz;
   if (walking) {
     const n = Math.hypot(dx, dz);
@@ -2089,6 +2349,9 @@ function loop() {
   const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
   sitBtn.hidden = mySeat < 0 && freeSeat < 0;
   sitBtn.setAttribute("aria-label", mySeat >= 0 ? "stand up" : "sit");
+  holdBtn.hidden = mySeat < 0;
+  holdBtn.classList.toggle("on", myHold > 0);
+  holdBtn.setAttribute("aria-label", "hold " + HELD[(myHold + 1) % 3]);
   updateOthers(dt);
 
   // smooth the height so it doesn't jitter on small terrain steps
@@ -2097,20 +2360,25 @@ function loop() {
     mySeat >= 0 ? seatSpot(mySeat).y : topHeight(pos.x, pos.z),
     Math.min(1, dt * 12),
   );
-  sprite.position.copy(pos);
+  const k = Math.exp(-dt * 9);
+  slide.x = Math.abs(slide.x * k) < 0.01 ? 0 : slide.x * k;
+  slide.z = Math.abs(slide.z * k) < 0.01 ? 0 : slide.z * k;
+  sprite.position.set(pos.x + slide.x, pos.y, pos.z + slide.z);
   if (running && GENDER === "male") sprite.position.y -= 0.8;
-  shadow.position.set(pos.x, pos.y + 0.05, pos.z);
+  shadow.position.set(pos.x + slide.x, pos.y + 0.05, pos.z + slide.z);
   shadow.visible = mySeat < 0; // would float under the hanging feet
+  camera.position.set(pos.x + slide.x, pos.y + 38, pos.z + 42 + slide.z);
+  camera.lookAt(pos.x + slide.x, pos.y + 1, pos.z + slide.z);
   updateOcclusion();
-  camera.position.set(pos.x, pos.y + 38, pos.z + 42);
-  camera.lookAt(pos.x, pos.y + 1, pos.z);
   // facing the camera, tilted only halfway (the shadow looks like a standing body)
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
+  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, mySeat >= 0 ? seatSpot(mySeat) : null);
 
   renderer.render(scene, camera);
   updateNameTags();
   updateBubbles();
   updateSitPrompt(freeSeat);
+  updateWallPrompt();
   requestAnimationFrame(loop);
 }
 loop();

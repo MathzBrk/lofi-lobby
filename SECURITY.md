@@ -7,7 +7,7 @@ The client is public, so the server trusts nothing it sends.
 - **No accounts.** Anyone with the URL joins a room with a name they pick; names are not unique and prove nothing.
 - **Admin** is one secret, `ADMIN_PASSWORD`, stored only as a Worker secret (and in a git-ignored `.dev.vars` locally). It is typed in a login box opened by `/admin` (never in the chat box or the URL), compared in **constant time**, and an IP is blocked for 1 minute after **20 wrong tries** (tries are also rate-limited to about one per second). Admin can restart or skip the song, and kick or ban players.
 - **Origin check:** the WebSocket only accepts the site's own origin, plus any listed in `ALLOWED_ORIGINS`. Anything else gets `403`.
-- **Limits per connection:** 1 KB per message; rate limits (token bucket) for positions, chat, bench seats and everything else; **100 players** per room.
+- **Limits per connection:** 1 KB per message; rate limits (token bucket) for positions, chat, bench seats and everything else (what a sitter holds is one of three fixed values); **100 players** per room.
 - **Input is cleaned:** names (16 chars) and chat (140 chars) lose control and bidi characters; coordinates must be finite and within bounds; enums are checked against a list.
 - **Output is safe:** the browser inserts every text that comes from the network with `textContent`, never as HTML.
 - **Static game assets only:** the repo and live site serve the reviewed files in `public/assets/`; visitors cannot upload assets ([ADR 005](docs/adr/005-version-and-deploy-game-assets.md)).
@@ -17,6 +17,9 @@ The client is public, so the server trusts nothing it sends.
 - **Progressive mute** for chat spam, per IP.
 
 - **Chat history:** the room keeps the last 30 messages from the last 2 hours (name, text, time; never the IP) so people who just joined can read them. Messages are filtered before they are stored, and a banned player's messages are removed.
+
+- **Message wall:** notes are kept forever (name, trainer, text, colour, time; never the IP). Writing is only accepted from the site's own origin, with a body of at most 12 KB; the text is cut to 2,000 characters and 40 lines and goes through the same cleaning and word filter as the chat, the name through the same filter as names. Notes with a link are refused (a scheme, `www.`, a domain, or `name.xx/path`). Notes with a link are refused (a scheme, `www.`, a domain, or `name.xx/path`). One note per minute per IP (the time of an IP's last note is kept for that and removed by the daily cron); banned IPs can't write. The admin deletes a note with the admin password, under the same lockout.
+- **Whose note it is:** there are no accounts, so the browser keeps a random "wall key" and sends it with each note. The note stores only the key's SHA-256, which is never sent to anyone; showing the key again is what allows editing (same cleaning, filter and link rule; 5 s between edits) or deleting that note. Clearing the browser's data loses the key, and the note can then only be removed by the admin. Notes written before wall keys existed have no owner: the admin can claim one (it becomes theirs to edit); a note that has an owner can never be claimed.
 
 A word list never catches everything; kick and ban cover the rest.
 

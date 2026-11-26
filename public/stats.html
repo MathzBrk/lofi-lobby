@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>Lofi Lobby stats</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link href="https://fonts.googleapis.com/css2?family=Silkscreen&display=swap" rel="stylesheet" />
+<style>
+  :root { --bg: #07080c; --card: #10121a; --line: rgba(255,255,255,.12); --ink: #F2F2F5; --muted: #9a9db0; --gold: #ffc95a; --blue: #7aa7ff; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: Silkscreen, monospace; }
+  main { max-width: 1080px; margin: 0 auto; padding: 32px 16px 48px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 22px; font-weight: 400; margin: 0; }
+  header a, header small { color: var(--muted); font-size: 11px; }
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+  .kpi small { display: block; color: var(--muted); font-size: 10px; margin-bottom: 6px; }
+  .kpi b { font-size: 24px; font-weight: 400; }
+  .kpi b.live { color: var(--gold); }
+  .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+  .grid > .wide { grid-column: 1 / -1; }
+  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+  h2 { font-size: 12px; font-weight: 400; color: var(--muted); margin: 0 0 12px; }
+  h2 i { font-style: normal; color: var(--gold); } h2 em { font-style: normal; color: var(--blue); }
+  svg { display: block; width: 100%; height: auto; font-family: Silkscreen, monospace; }
+  svg text { fill: var(--muted); font-size: 9px; }
+  .bar { fill: var(--gold); }
+  .hit { fill: transparent; } .hit:hover { fill: rgba(255,255,255,.06); }
+  #tip { position: fixed; z-index: 9; display: none; flex-direction: column; gap: 3px; pointer-events: none; font-size: 11px;
+         padding: 8px 10px; border-radius: 6px; background: rgba(0,0,0,.92); border: 1px solid var(--line); color: var(--ink); }
+  #tip b { font-weight: 400; color: var(--muted); } #tip i { font-style: normal; color: var(--gold); } #tip em { font-style: normal; color: var(--blue); }
+  .line { fill: none; stroke: var(--blue); stroke-width: 2; }
+  .dot { fill: var(--blue); }
+  .rows { display: flex; flex-direction: column; gap: 8px; font-size: 11px; }
+  .row { display: grid; grid-template-columns: 40px 1fr 40px; gap: 8px; align-items: center; }
+  .row .track { height: 8px; background: rgba(255,255,255,.06); border-radius: 2px; overflow: hidden; }
+  .row .fill { height: 100%; background: var(--gold); }
+  .row span:last-child { text-align: right; color: var(--muted); }
+  #login { max-width: 320px; margin: 18vh auto 0; display: flex; flex-direction: column; gap: 10px; }
+  #login input { font: inherit; font-size: 13px; color: var(--ink); background: rgba(0,0,0,.4); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; }
+  #login button { font: inherit; font-size: 12px; color: var(--gold); background: none; border: 1px solid var(--gold); border-radius: 6px; padding: 8px; cursor: pointer; }
+  #login p, .err { color: #ff8a6b; font-size: 11px; margin: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<form id="login" class="card" hidden><b>stats · admin</b>
+  <input type="password" placeholder="admin password" aria-label="admin password" autocomplete="current-password" />
+  <button type="submit">open</button><p></p>
+</form>
+<main id="page" hidden>
+  <header><h1>Lofi Lobby · stats</h1><small id="updated"></small><a href="/">back to the town</a></header>
+  <p class="err" id="errors" hidden></p>
+  <section class="kpis">
+    <div class="card kpi"><small>online now</small><b class="live" id="k-online">–</b></div>
+    <div class="card kpi"><small>visitors today</small><b id="k-today">–</b></div>
+    <div class="card kpi"><small>visitors · 7 days</small><b id="k-week">–</b></div>
+    <div class="card kpi"><small>peak online · ever</small><b id="k-peak">–</b></div>
+    <div class="card kpi"><small>avg time in the room</small><b id="k-time">–</b></div>
+    <div class="card kpi"><small>chat messages · 7 days</small><b id="k-chat">–</b></div>
+  </section>
+  <section class="grid">
+    <div class="card wide"><h2><i>■ visitors</i> and <em>● peak online</em> per day · <span id="span">30 days</span></h2><div id="c-daily"></div></div>
+    <div class="card wide"><h2>connections per day, measured by Cloudflare since launch (page loads and reconnects, not unique people)</h2><div id="c-conn"></div></div>
+    <div class="card"><h2>joins by hour of the day (UTC) · 30 days</h2><div id="c-hours"></div></div>
+    <div class="card"><h2>countries · 30 days</h2><div class="rows" id="c-countries"></div></div>
+    <div class="card"><h2>avg minutes in the room per day</h2><div id="c-time"></div></div>
+    <div class="card"><h2>trainer · 30 days</h2><div class="rows" id="c-genders"></div></div>
+  </section>
+</main>
+<script>
+  const $ = (s) => document.querySelector(s);
+  const NS = "http://www.w3.org/2000/svg";
+  const el = (tag, attrs, text) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text != null) e.textContent = text; return e; };
+  const n = (v) => Math.round(Number(v) || 0);
+  const dayKey = (d) => String(d).slice(0, 10);
+
+  // every day since the oldest one we know of (at least 30), with zeros where nothing happened
+  let SPAN = 30;
+  function days30(rows, field) {
+    const map = new Map(rows.map((r) => [dayKey(r.day), Number(r[field]) || 0]));
+    const out = [];
+    for (let i = SPAN - 1; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
+      out.push({ label: d.slice(5), value: map.get(d) || 0 });
+    }
+    return out;
+  }
+
+  // bars (and an optional line on the same scale) as a small SVG
+  const tip = document.createElement("div");
+  tip.id = "tip";
+  document.body.append(tip);
+  function bars(target, data, line, fmt = n, names = ["value", "online"]) {
+    const W = 640, H = 200, L = 30, B = 22, T = 10;
+    const max = Math.max(1, ...data.map((d) => d.value), ...(line || []).map((d) => d.value));
+    const y = (v) => H - B - (v / max) * (H - B - T);
+    const step = (W - L) / data.length;
+    const svg = el("svg", { viewBox: `0 0 ${W} ${H}` });
+    for (const t of [0, max / 2, max]) {
+      svg.append(el("line", { x1: L, x2: W, y1: y(t), y2: y(t), stroke: "rgba(255,255,255,.08)" }));
+      svg.append(el("text", { x: L - 6, y: y(t) + 3, "text-anchor": "end" }, fmt(t)));
+    }
+    data.forEach((d, i) => {
+      const r = el("rect", { class: "bar", x: L + i * step + step * 0.15, y: y(d.value), width: step * 0.7, height: Math.max(0, H - B - y(d.value)), rx: 1 });
+      svg.append(r);
+      const every = Math.ceil(data.length / 10);
+      if (i % every === 0) svg.append(el("text", { x: L + i * step + step / 2, y: H - 6, "text-anchor": "middle" }, d.label));
+    });
+    if (line) {
+      svg.append(el("polyline", { class: "line", points: line.map((d, i) => `${L + i * step + step / 2},${y(d.value)}`).join(" ") }));
+      line.forEach((d, i) => svg.append(el("circle", { class: "dot", cx: L + i * step + step / 2, cy: y(d.value), r: 2.5 })));
+    }
+    // hover: a full-height column per point shows its values right away
+    data.forEach((d, i) => {
+      const hit = el("rect", { class: "hit", x: L + i * step, y: 0, width: step, height: H - B });
+      hit.addEventListener("pointermove", (e) => {
+        tip.innerHTML = `<b></b><span><i>■</i> ${names[0]}: ${fmt(d.value)}</span>` + (line ? `<span><em>●</em> ${names[1]}: ${fmt(line[i].value)}</span>` : "");
+        tip.firstChild.textContent = d.tip || d.label;
+        tip.style.display = "flex";
+        const w = tip.offsetWidth;
+        tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px";
+        tip.style.top = e.clientY + 14 + "px";
+      });
+      hit.addEventListener("pointerleave", () => (tip.style.display = "none"));
+      svg.append(hit);
+    });
+    $(target).replaceChildren(svg);
+  }
+
+  function rows(target, items) {
+    const max = Math.max(1, ...items.map((i) => i.value));
+    $(target).replaceChildren(...items.map((i) => {
+      const r = document.createElement("div");
+      r.className = "row";
+      r.innerHTML = `<span></span><div class="track"><div class="fill" style="width:${(i.value / max) * 100}%"></div></div><span>${n(i.value)}</span>`;
+      r.firstChild.textContent = i.label;
+      return r;
+    }));
+  }
+
+  function draw(s) {
+    // archived days (kept forever) under the live 3 months; live wins where both exist
+    const merge = (live) => {
+      const m = new Map((s.archive || []).map((a) => [a.day, a]));
+      for (const r of live) m.set(dayKey(r.day), r);
+      return [...m.values()];
+    };
+    s.daily = merge(s.daily);
+    s.sessions = merge(s.sessions);
+    s.chat = merge(s.chat);
+    const oldest = [...(s.archive || []), ...(s.connections || [])].map((r) => dayKey(r.day)).sort()[0];
+    SPAN = Math.max(30, oldest ? Math.ceil((Date.now() - Date.parse(oldest)) / 864e5) + 1 : 30);
+    $("#span").textContent = SPAN + " days";
+    bars("#c-conn", days30(s.connections || [], "requests"), null, n, ["connections"]);
+    const visitors = days30(s.daily, "visitors");
+    // peak online: the game's own count, or Cloudflare's (most WebSockets open at once) for older days
+    const cfPeak = days30(s.connections || [], "peak");
+    const peak = days30(s.daily, "peak").map((d, i) => ({ ...d, value: Math.max(d.value, cfPeak[i].value) }));
+    const chat = days30(s.chat, "messages");
+    const time = days30(s.sessions, "avgSeconds").map((d) => ({ ...d, value: d.value / 60 }));
+    $("#k-online").textContent = s.online;
+    $("#k-today").textContent = visitors.at(-1).value;
+    // visitors are per day (hash of IP + day), so a week is the sum of the days
+    $("#k-week").textContent = visitors.slice(-7).reduce((a, d) => a + d.value, 0);
+    $("#k-peak").textContent = Math.max(0, ...peak.map((d) => d.value));
+    const withTime = s.sessions.filter((r) => Number(r.avgSeconds) > 0);
+    const avg = withTime.length ? withTime.reduce((a, r) => a + Number(r.avgSeconds), 0) / withTime.length : 0;
+    $("#k-time").textContent = avg >= 60 ? Math.round(avg / 60) + " min" : Math.round(avg) + " s";
+    $("#k-chat").textContent = chat.slice(-7).reduce((a, d) => a + d.value, 0);
+    bars("#c-daily", visitors, peak, n, ["visitors", "peak online"]);
+    const hours = new Map(s.hours.map((r) => [Number(r.hour), Number(r.joins)]));
+    bars("#c-hours", Array.from({ length: 24 }, (_, h) => ({ label: String(h).padStart(2, "0"), tip: String(h).padStart(2, "0") + ":00 UTC", value: hours.get(h) || 0 })), null, n, ["joins"]);
+    bars("#c-time", time, null, (v) => Math.round(v), ["minutes"]);
+    rows("#c-countries", s.countries.map((r) => ({ label: r.country || "??", value: Number(r.visitors) })));
+    rows("#c-genders", s.genders.map((r) => ({ label: r.gender === "female" ? "♀" : "♂", value: Number(r.joins) })));
+    $("#updated").textContent = "updated " + new Date().toLocaleTimeString();
+    $("#errors").hidden = !s.errors;
+    $("#errors").textContent = (s.errors || []).join(" · ");
+  }
+
+  let password = "";
+  try { password = localStorage.getItem("admin-password") || ""; } catch {}
+  async function load() {
+    const r = await fetch("/api/stats", { headers: { Authorization: "Bearer " + password } });
+    const body = await r.json().catch(() => ({ error: "stats unavailable" }));
+    if (!r.ok) {
+      $("#page").hidden = true;
+      $("#login").hidden = false;
+      $("#login p").textContent = password ? body.error : "";
+      return false;
+    }
+    $("#login").hidden = true;
+    $("#page").hidden = false;
+    draw(body);
+    return true;
+  }
+  $("#login").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    password = $("#login input").value;
+    if (await load()) try { localStorage.setItem("admin-password", password); } catch {}
+  });
+  load();
+  setInterval(() => { if (!$("#page").hidden) load(); }, 60000);
+</script>
+</body>
+</html>

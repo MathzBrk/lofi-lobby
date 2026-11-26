@@ -57,3 +57,15 @@ export function cleanChat(text) {
   if (ANYWHERE_LIST.some((t) => normalize(text).includes(t))) return null;
   return text.replace(/\S+/g, (tok) => (badWord(tok) ? "*".repeat(Math.min(tok.length, 6)) : tok));
 }
+
+// links (the message wall refuses them: a note stays forever, so it is where spam would go).
+// A scheme, "www.", a name glued to a domain ending ("site.com", "site[.]com", "site dot com"),
+// or any "name.xx/path" ("t.me/x"). Endings that are also everyday words (me, to, ai...) only count
+// with a path, so a missing space after a full stop ("lugar.me sinto") is not taken for a link.
+const TLDS = "com net org io gg br ly tv xyz app dev info online ru cc tk uk vip";
+const DOT = String.raw`(?:\.|\s*[\[(]\s*(?:\.|dot|ponto)\s*[\])]\s*|\s+dot\s+)`;
+const LINK = new RegExp(
+  String.raw`(?:https?:|ftp:)\s*//|\bwww\s*\.|[a-z0-9-]{2,}${DOT}(?:${TLDS.split(" ").join("|")})(?![a-z0-9])|[a-z0-9-]+\.[a-z]{2,}/\S`,
+  "i",
+);
+export const hasLink = (text) => LINK.test(String(text).normalize("NFKC"));
