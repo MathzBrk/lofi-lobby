@@ -102,6 +102,7 @@ const topKey = (likes, id) => `top:${String(likes).padStart(6, "0")}:${id}`;
 const RATES = { pos: [30, 20], chat: [8, 1], sit: [20, 6], like: [30, 0.5], other: [10, 1] };
 const HEARTBEAT_CHECK_MS = 60_000;
 const HEARTBEAT_TIMEOUT_MS = 120_000; // > 60s background tab timer throttling
+const HELLO_TIMEOUT_MS = 15_000; // pre-hello sockets cannot hold room slots via edge pings
 const LEAVE_BYTES = 256;
 
 // RFC 6455 forbids passing reserved close codes (1005, 1006, 1015) to ws.close()
@@ -557,6 +558,7 @@ export class Room {
     if (!m || typeof m !== "object") return;
     const p = ws.deserializeAttachment();
     if (!p) return;
+    if (!p.joinedAt && m.t !== "hello") return;
     const type = m.t === "pos" ? "pos" : m.t === "chat" ? "chat" : m.t === "sit" ? "sit" : "other";
     // the seat the room really has for this player, tagged with the request it answers
     const seatReply = () => ws.send(JSON.stringify({ t: "seat", id: p.id, seat: p.seat ?? -1, n: Number.isSafeInteger(m.n) ? m.n : 0 }));
@@ -811,6 +813,10 @@ export class Room {
       const p = ws.deserializeAttachment();
       if (ws.readyState !== 1 || !p || p.left) {
         stale.push(ws);
+        continue;
+      }
+      if (!p.joinedAt) {
+        if (now - (p.connectedAt ?? now) > HELLO_TIMEOUT_MS) stale.push(ws);
         continue;
       }
       const lastSeen = this.state.getWebSocketAutoResponseTimestamp?.(ws)?.getTime() ?? p.connectedAt ?? p.joinedAt ?? now;
