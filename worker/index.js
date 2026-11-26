@@ -152,8 +152,9 @@ const gender = (g) => (g === "female" ? "female" : "male");
 // Each browser paints it with its own hex for that name (NAME_COLORS in src/main.js).
 const NAME_COLORS = ["coral", "peach", "lime", "mint", "aqua", "sky", "lilac", "orchid", "pink", "rose"];
 const nameColor = (c) => (NAME_COLORS.includes(c) ? c : "");
-// which of the 5 cap colours a trainer wears (0 red, 1 blue, 2 green, 3 pink, 4 white)
-const cap = (c) => (Number.isInteger(c) && c >= 0 && c < 5 ? c : 0);
+// which of the 5 cap colours a trainer wears (0 red, 1 blue, 2 green, 3 pink, 4 white), or -1 when the
+// client said none: each trainer then keeps its own (the male's red cap, the female's white beanie)
+const cap = (c) => (Number.isInteger(c) && c >= 0 && c < 5 ? c : -1);
 
 // constant-time compare (timing doesn't leak how many characters match)
 function equal(a, b) {
@@ -516,7 +517,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap | 0, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap ?? -1, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
   }
   players() {
     return this.openSockets()

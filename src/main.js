@@ -2171,7 +2171,7 @@ function setFrameTex(tex, cfg, d, step) {
 function createOther(p) {
   if (others.has(p.id)) removeOther(p.id);
   const g = p.gender === "female" ? "female" : "male";
-  const cap = p.cap | 0;
+  const cap = capOf(p.cap) ?? SHEET_CAP[g]; // none sent: the cap that trainer is drawn with (red cap, white beanie)
   const available = sheetAvailable(g);
   const tex = available
     ? texLoader.load(

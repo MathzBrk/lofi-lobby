@@ -44,6 +44,7 @@
 - A single room, `lobby`: `?room=` is gone and the server refuses other room names, so nobody can open extra rooms to run up the bill.
 
 ### Fixed
+- A player whose cap colour is not known shows the cap their trainer is drawn with (red for the male, white for the female) instead of always red.
 - The chat button is back on phones (a desktop-only rule was hiding it there too).
 - Name tags, chat bubbles and the sit and wall prompts no longer show over the chat and the other panels.
 - The chat bubble over a trainer keeps one size on every screen (it used to get narrower on small screens and near the right edge).
