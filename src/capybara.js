@@ -1,5 +1,6 @@
-// Capybara: a pixel-art billboard in the middle of town. Walk up and press E to feed it;
-// it thanks you, ironically, in a speech bubble (only you see it: nothing goes to the server).
+// Capybara: a pixel-art billboard that walks a stretch of the lower road, there and back, and sits down to eat when fed. Walk up and press E to feed it;
+// it thanks you, ironically, in a speech bubble. Where it is, what it does and what it says come from the room
+// (src/main.js), the same for every player; this file only draws it.
 import * as THREE from "three";
 
 export const CAPY_NEAR = 4; // how close you must be to feed it
@@ -26,14 +27,38 @@ export const PHRASES = [
   "Você é tipo um herói. Um herói bem pequenininho.",
   "Que atitude nobre. Vou mencionar você no meu discurso do Oscar.",
   "Valeu. Aceito pix também, só pra constar.",
+  // for the devs in the lobby
+  "Obrigada! Funcionou na sua máquina, né? Na minha barriga também.",
+  "Que capim lindo. Tem testes? Não? Imaginei.",
+  "Valeu. Vou fazer o code review disso aqui com os dentes.",
+  "Comida em produção numa sexta à noite? Corajoso.",
+  "Obrigada. Agora só falta o deploy do segundo capim.",
+  "Hmm, capim legado. Ninguém sabe quem plantou, mas funciona.",
+  "Agradeço. Vou abrir uma issue: 'porção pequena, prioridade alta'.",
+  "Que gentileza. Mais rápido que o seu build, pelo menos.",
+  "Obrigada! LGTM. Não li, mas LGTM.",
+  "Delícia. Pena que veio sem documentação, como tudo que você faz.",
+  "Valeu. Isso aqui resolve o meu problema mais que a sua última sprint.",
+  "Comi. Agora vou dormir igual o seu pipeline de CI: por horas.",
+  "Obrigada pelo capim. Foi copiado do Stack Overflow?",
+  "Que lindo. Você até que serve pra algo além de fazer merge com conflito.",
+  "Obrigada! Já estimou quanto tempo leva pra me dar outro? Multiplica por três.",
+  "Sério, valeu. É o primeiro commit seu que não quebrou nada.",
+  "Uau, capim sem bug. Você pediu pra IA, né?",
+  "Agradeço a refatoração da minha fome. Ficou só um pouquinho pior.",
+  "Obrigada. Vou marcar como 'won't fix' e pedir outro.",
+  "Nossa, entregou no prazo. Tá se sentindo bem?",
 ];
 
-// 4 frames side by side, 32x24 logical pixels each, drawn at 2x like the trainers:
-// 0 idle, 1 blink, 2-3 chewing (head bobs, mouth opens)
+// 7 frames side by side, 32x24 logical pixels each, drawn at 2x like the trainers:
+// 0 sitting, 1 sitting + blink, 2-3 sitting + chewing (head bobs, mouth opens), 4 asleep (lying down),
+// 5-6 walking on all fours (5 is also standing still). Drawn facing left; the texture is mirrored to face right.
 const W = 32,
   H = 24,
   P = 2,
-  FRAMES = 4;
+  FRAMES = 7;
+export const SLEEP_FRAME = 4;
+const WALK_FRAME = 5;
 const C = {
   light: "#c08a55",
   base: "#9c6a3c",
@@ -49,35 +74,52 @@ const C = {
 function drawFrame(c, f) {
   const grid = Array.from({ length: H }, () => Array(W).fill(null));
   const fill = (x, y, col) => x >= 0 && x < W && y >= 0 && y < H && (grid[y][x] = col);
-  const chew = f >= 2;
-  const bob = f === 3 ? 1 : 0;
-  // body: an ellipse, lighter on top and darker underneath
-  for (let y = 0; y < H; y++)
-    for (let x = 0; x < W; x++) {
-      const dx = (x - 19) / 10.5,
-        dy = (y - 14) / 6.5;
-      if (dx * dx + dy * dy <= 1) fill(x, y, dy < -0.45 ? C.light : dy > 0.5 ? C.dark : C.base);
-    }
-  // legs (short and stubby)
-  for (const lx of [10, 13, 23, 26])
-    for (let y = 18; y < 22; y++) fill(lx, y, y > 19 ? C.darker : C.dark), fill(lx + 1, y, C.dark);
-  // head: a blocky capybara head facing left, bobbing while chewing
-  for (let y = 5; y < 15; y++)
-    for (let x = 2; x < 14; x++) {
-      const corner = (x < 4 && (y < 7 || y > 13)) || (x > 11 && y < 6);
-      if (!corner) fill(x, y + bob, y < 8 ? C.light : y > 12 ? C.dark : C.base);
-    }
-  // snout tip and nostril
-  for (let y = 8; y < 12; y++) fill(2, y + bob, C.snout), fill(3, y + bob, C.snout);
-  fill(2, 9 + bob, C.outline);
-  // ear
-  fill(11, 3 + bob, C.dark), fill(12, 3 + bob, C.dark), fill(11, 4 + bob, C.darker), fill(12, 4 + bob, C.dark);
-  // eye: blinks on frame 1
-  if (f === 1) fill(7, 8 + bob, C.eye), fill(8, 8 + bob, C.eye);
-  else fill(7, 7 + bob, C.eye), fill(8, 7 + bob, C.eye), fill(7, 8 + bob, C.eye), fill(8, 8 + bob, C.shine);
-  // mouth: a line, open while chewing (with a blade of grass)
-  fill(3, 13 + bob, C.mouth), fill(4, 13 + bob, C.mouth);
-  if (chew) fill(3, 14 + bob, C.mouth), fill(1, 14 + bob, "#7fbf4d"), fill(0, 15 + bob, "#5e9a35");
+  // a tilted ellipse, lighter on top and darker underneath
+  const blob = (cx, cy, rx, ry, tilt) => {
+    const cs = Math.cos(tilt),
+      sn = Math.sin(tilt);
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const u = ((x - cx) * cs + (y - cy) * sn) / rx,
+          v = (-(x - cx) * sn + (y - cy) * cs) / ry;
+        if (u * u + v * v <= 1) fill(x, y, v < -0.45 ? C.light : v > 0.5 ? C.dark : C.base);
+      }
+  };
+  // blocky head facing left, its top-left corner at (hx, hy)
+  const head = (hx, hy, eyes, chew) => {
+    for (let y = 0; y < 9; y++)
+      for (let x = 0; x < 11; x++) {
+        const corner = (x < 2 && (y < 2 || y > 7)) || (x > 9 && y < 1);
+        if (!corner) fill(hx + x, hy + y, y < 3 ? C.light : y > 7 ? C.dark : C.base);
+      }
+    for (let y = 3; y < 7; y++) fill(hx, hy + y, C.snout), fill(hx + 1, hy + y, C.snout);
+    fill(hx, hy + 4, C.outline); // nostril
+    fill(hx + 9, hy - 2, C.dark), fill(hx + 10, hy - 2, C.dark), fill(hx + 9, hy - 1, C.darker), fill(hx + 10, hy - 1, C.dark); // ear
+    if (eyes === "closed") fill(hx + 5, hy + 3, C.eye), fill(hx + 6, hy + 3, C.eye);
+    else fill(hx + 5, hy + 2, C.eye), fill(hx + 6, hy + 2, C.eye), fill(hx + 5, hy + 3, C.eye), fill(hx + 6, hy + 3, C.shine);
+    fill(hx + 1, hy + 8, C.mouth), fill(hx + 2, hy + 8, C.mouth);
+    if (chew) fill(hx + 1, hy + 9, C.mouth), fill(hx - 1, hy + 9, "#7fbf4d"), fill(hx - 2, hy + 10, "#5e9a35");
+  };
+  if (f === SLEEP_FRAME) {
+    // lying flat, legs tucked in, head resting on the ground with the eyes shut
+    blob(18, 17.5, 12, 4.8, 0);
+    head(3, 12, "closed", false);
+  } else if (f >= WALK_FRAME) {
+    // on all fours: legs apart, then passing each other with the body a pixel higher
+    const pass = f - WALK_FRAME;
+    blob(19, 14 - pass, 10.5, 6.5, 0);
+    for (const lx of pass ? [11, 14, 23, 25] : [9, 14, 22, 27])
+      for (let y = 17; y < 22; y++) fill(lx, y, y > 19 ? C.darker : C.dark), fill(lx + 1, y, C.dark);
+    head(2, 5 - pass, "open", false);
+  } else {
+    const bob = f === 3 ? 1 : 0;
+    // sitting: haunches on the ground at the back, chest raised, front legs straight
+    blob(20, 15, 9.5, 6.2, 0.55);
+    blob(24, 18, 5.5, 3.6, 0); // haunch
+    for (const lx of [11, 14]) for (let y = 15; y < 22; y++) fill(lx, y, y > 19 ? C.darker : C.dark), fill(lx + 1, y, C.dark);
+    for (let x = 22; x < 28; x++) fill(x, 21, C.darker); // back foot
+    head(4, 3 + bob, f === 1 ? "closed" : "open", f >= 2);
+  }
   // outline: every empty pixel touching the creature
   const out = grid.map((row) => row.slice());
   for (let y = 0; y < H; y++)
@@ -108,23 +150,26 @@ export function createCapybara() {
   mesh.castShadow = true;
   mesh.scale.set(5, 3.75, 1); // same pixel size as a trainer (5 units per 32px)
 
-  let chewUntil = 0,
-    last = -1;
-  const setFrame = (f) => (tex.offset.x = f / FRAMES);
+  let pose = "walk", // "walk" | "eat" (sitting, chewing) | "sit"
+    facing = -1; // -1 left (as drawn), 1 right (mirrored)
+  const setFrame = (f) => {
+    tex.repeat.x = -facing / FRAMES;
+    tex.offset.x = (facing < 0 ? f : f + 1) / FRAMES;
+  };
   return {
     mesh,
-    // a new phrase each time, never the same one twice in a row
-    feed(now) {
-      chewUntil = now + 2200;
-      let i;
-      do i = Math.floor(Math.random() * PHRASES.length);
-      while (i === last);
-      last = i;
-      return PHRASES[i];
+    setPose(p) {
+      pose = p;
     },
-    update(now) {
-      if (now < chewUntil) setFrame(2 + (Math.floor(now / 180) % 2));
-      else setFrame(now % 4000 < 150 ? 1 : 0); // blinks every 4 s
+    // which way it looks: -1 left, 1 right
+    setFacing(side) {
+      facing = side < 0 ? -1 : 1;
+    },
+    // t: the room's clock in ms, so every player is on the same frame
+    update(t) {
+      if (pose === "walk") setFrame(WALK_FRAME + (Math.floor(t / 230) % 2));
+      else if (pose === "eat") setFrame(2 + (Math.floor(t / 180) % 2));
+      else setFrame(t % 4000 < 150 ? 1 : 0); // sitting, blinks every 4 s
     },
   };
 }
