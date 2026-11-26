@@ -36,6 +36,7 @@
 ### Changed
 - A bad word in the chat or on the wall now reads `LOBBA` instead of `***`.
 - Lighter shadows: the lamp posts' shadow maps are 512 instead of 1024 and the moon's (sun's by day) 1024 instead of 2048, the same on every device. The town looks the same by night and by day, and the game takes about 245 MB less of GPU memory (about 355 MB down to 110 MB).
+- Lamp shadows are redrawn only when they can change: once the town is in place, when the lamps come on at dusk, and when a trainer or the capybara moves within a lamp's reach (for the slow capybara, about 10 times a second). By day (lamps off) the 24 extra shadow passes per frame are skipped altogether, and at night they run only now and then: about 4,300 draw calls per frame down to 1,850 by day and 2,200 at night on average. They look the same, and a trainer or the capybara walking under a lamp still casts a moving shadow for everyone.
 - Two trainers standing close: the one in front now covers the other from head to toe (the feet of the one behind used to show through). Every trainer is drawn at the depth of its feet, not only yours.
 - Admin login: type `/admin` in the chat and then the password in its own login box instead of `?admin=` in the URL; `/logout` leaves. Admin lock is looser: 20 tries, then 1 minute.
 - You come back where you were: the position is remembered in the browser and sent when you (re)connect, so others see you in the right spot even if you stand still.
