@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Sit on the ground**: press **C** (or the sitting button in the top card) to sit down wherever you are, facing the way you stand: front, back, left or right. Everyone sees it, also whoever joins later; walking, sitting on a bench or C again gets you up. The sitting frames are drawn in code from each trainer's own standing frames (with its cap colour), so there are no new assets.
 - A small GitHub link beside the chat: the game is open source, come and contribute.
 - **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
 - **Trainer and cap in the top card**: a male/female switch and, beside it, the cap you wear (drawn as a little cap, so it is not taken for the name colour's dot). Click the cap to see the other colours; picking one folds them away.
