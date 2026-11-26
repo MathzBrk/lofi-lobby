@@ -34,7 +34,7 @@
 //  - allowed origins (ALLOWED_ORIGINS) so other sites can't use this server
 //  - per IP: few connections, shared chat budget, admin lockout, progressive mute for spam
 //  - all text is stripped of control characters and truncated; numbers finite and clamped
-//  - word filter: bad names refused, bad chat words become LOBBA (worker/moderation.js)
+//  - word filter: bad names refused, bad chat words become "lobba" (worker/moderation.js)
 //  - admin kick (short IP ban) and ban (long IP ban), kept in storage
 //
 // Message wall (HTTP, a note is too long for a WebSocket frame): notes kept forever in this room's storage,
@@ -310,7 +310,7 @@ export class Room {
       const raw = cleanNote(m?.text);
       if (!raw) return json({ error: "write something first" }, 400);
       if (hasLink(raw)) return json({ error: "links are not allowed on the wall" }, 400);
-      const text = cleanChat(raw);
+      const text = cleanChat(raw, NOTE_MAX);
       if (text === null) return json({ error: "note blocked" }, 400);
       let name = cleanText(m.name, 16) || "trainer";
       if (badName(name) || /admin|moderador|moderator|staff/.test(normalize(name))) name = "trainer";
@@ -337,7 +337,7 @@ export class Room {
       const raw = cleanNote(m?.text);
       if (!raw) return json({ error: "write something first" }, 400);
       if (hasLink(raw)) return json({ error: "links are not allowed on the wall" }, 400);
-      const text = cleanChat(raw);
+      const text = cleanChat(raw, NOTE_MAX);
       if (text === null) return json({ error: "note blocked" }, 400);
       const now = Date.now();
       const [ban, note] = await Promise.all([this.state.storage.get("ban:" + ip), this.state.storage.get(del[1])]);
@@ -660,7 +660,7 @@ export class Room {
       await this.state.storage.put("radio", command);
       this.broadcast({ t: "radio", command });
     } else if (m.t === "chat") {
-      const text = cleanChat(cleanText(m.text, 140));
+      const text = cleanChat(cleanText(m.text, 140), 140);
       if (text === null) return void ws.send(JSON.stringify({ t: "error", msg: "message blocked" }));
       if (!text) return;
       const now = Date.now();
