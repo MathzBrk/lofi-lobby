@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- A small GitHub link beside the chat: the game is open source, come and contribute.
 - **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
 - **Trainer and cap in the top card**: a male/female switch and, beside it, the cap you wear (drawn as a little cap, so it is not taken for the name colour's dot). Click the cap to see the other colours; picking one folds them away.
 - **The capybara takes a walk**: it strolls left and right on the sand path in front of the house on the right, by day and by night. Feed it (E) and it sits down to chew and thank you, then walks on. Everyone sees the same capybara: same place, same step, same thank-you (the room keeps its clock and tells everyone when it is fed).
