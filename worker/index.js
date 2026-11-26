@@ -49,7 +49,7 @@ const STRIKE_RESET_MS = 30 * 60_000;
 const REPEAT_LIMIT = 3; // the same text more than this many times in a row...
 const REPEAT_WINDOW_MS = 30_000; // ...inside this window counts as spam
 // rate buckets: capacity, refill per second
-const RATES = { pos: [30, 20], chat: [8, 1], other: [10, 1] };
+const RATES = { pos: [30, 20], chat: [8, 1], sit: [20, 6], other: [10, 1] };
 
 import { badName, cleanChat, normalize } from "./moderation.js";
 
@@ -123,10 +123,10 @@ export class Room {
     }
   }
 
-  // rate limit (token bucket): movement per connection, chat and the rest shared by everyone on one IP
+  // rate limit (token bucket): movement and seats per connection, chat and the rest shared by everyone on one IP
   allowed(p, type) {
     const [cap, refill] = RATES[type] || RATES.other;
-    const key = (type === "pos" ? p.id : p.ip) + "|" + type;
+    const key = (type === "pos" || type === "sit" ? p.id : p.ip) + "|" + type;
     const now = Date.now() / 1000;
     let k = this.buckets.get(key);
     if (!k) this.buckets.set(key, (k = { tokens: cap, at: now }));
@@ -144,9 +144,11 @@ export class Room {
     if (!m || typeof m !== "object") return;
     const p = ws.deserializeAttachment();
     if (!p) return;
-    const type = m.t === "pos" ? "pos" : m.t === "chat" ? "chat" : "other";
+    const type = m.t === "pos" ? "pos" : m.t === "chat" ? "chat" : m.t === "sit" ? "sit" : "other";
     if (!this.allowed(p, type)) {
       if (type === "chat") this.strike(ws, p.ip);
+      // a dropped sit would leave the client and the room disagreeing: tell it where it really is
+      if (type === "sit") ws.send(JSON.stringify({ t: "seat", id: p.id, seat: p.seat ?? -1 }));
       return;
     }
 
@@ -177,15 +179,17 @@ export class Room {
       ws.serializeAttachment(p);
       this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
     } else if (m.t === "sit") {
-      // one player per seat; -1 stands up. A taken seat is refused back to the sender only.
+      // one player per seat; -1 stands up. A taken seat is refused back to the sender only,
+      // with the seat the room really has for them
       const seat = Number.isInteger(m.seat) && m.seat >= 0 && m.seat < MAX_SEATS ? m.seat : -1;
       if (seat >= 0 && this.players().some((q) => q.id !== p.id && q.seat === seat)) {
-        ws.send(JSON.stringify({ t: "seat", id: p.id, seat: -1 }));
+        ws.send(JSON.stringify({ t: "seat", id: p.id, seat: p.seat ?? -1 }));
         return;
       }
       p.seat = seat;
       ws.serializeAttachment(p);
-      this.broadcast({ t: "seat", id: p.id, seat });
+      // not back to the sender: it already moved, and a late echo would undo a quick sit/stand
+      this.broadcast({ t: "seat", id: p.id, seat }, ws);
     } else if (m.t === "auth") {
       if (!(await this.isAdmin(ws, p, m.password))) return;
       // everyone sees who the admin is (badge over the name, colour in the chat)

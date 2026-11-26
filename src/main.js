@@ -1481,8 +1481,13 @@ function standUp(notify = true) {
   }
   if (notify) sendSeat();
 }
+// at most one sit or stand per SIT_COOLDOWN ms, so mashing E stays under the server's rate limit
+const SIT_COOLDOWN = 350;
+let lastToggle = 0;
 const toggleSit = () => {
-  if (gamePaused) return;
+  const now = performance.now();
+  if (gamePaused || now - lastToggle < SIT_COOLDOWN) return;
+  lastToggle = now;
   if (mySeat >= 0) return standUp();
   const id = nearestFreeSeat();
   if (id >= 0) sit(id);
@@ -1496,7 +1501,7 @@ addEventListener("keydown", (e) => {
   const k = e.key.toLowerCase();
   if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "e") toggleSit();
   // a quick tap on a move key can end before the next frame: stand up right away
-  else if (!typing && mySeat >= 0 && ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) standUp();
+  else if (!typing && !gamePaused && mySeat >= 0 && ["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) standUp();
 });
 // respawn asks for a second click, so a curious click doesn't teleport you
 let respawnTimer = 0;
@@ -1510,6 +1515,7 @@ document.querySelector("#respawn").addEventListener("click", (e) => {
   }
   clearTimeout(respawnTimer);
   btn.classList.remove("confirm");
+  if (mySeat >= 0) standUp(); // free the seat first, or the room keeps you on the bench
   pos.set(0, 0, 0);
   lastSaved = 0;
   savePosition(performance.now());
@@ -1730,9 +1736,12 @@ function connect() {
         createOther(p);
       }
     } else if (m.t === "seat") {
-      // the server says who sits where; a refused seat (taken) stands you back up
+      // the server says who sits where. About you, it only answers a refused or dropped sit:
+      // you're not on the seat you asked for, so stand up; or the room still has you seated
+      // after you stood up, so say it again
       if (m.id === myId) {
-        if (m.seat < 0 && mySeat >= 0) standUp(false);
+        if (m.seat !== mySeat && mySeat >= 0) standUp(m.seat >= 0);
+        else if (m.seat >= 0 && mySeat < 0) setTimeout(sendSeat, 1000);
       } else {
         const o = others.get(m.id);
         if (o) o.seat = m.seat;
