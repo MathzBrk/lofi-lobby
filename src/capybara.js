@@ -1,5 +1,6 @@
-// Capybara: a pixel-art billboard in the middle of town, sitting by day and asleep at night. Walk up and press E to feed it;
-// it thanks you, ironically, in a speech bubble (only you see it: nothing goes to the server).
+// Capybara: a pixel-art billboard that walks a stretch of the lower road, there and back, and sits down to eat when fed. Walk up and press E to feed it;
+// it thanks you, ironically, in a speech bubble. Where it is, what it does and what it says come from the room
+// (src/main.js), the same for every player; this file only draws it.
 import * as THREE from "three";
 
 export const CAPY_NEAR = 4; // how close you must be to feed it
@@ -49,13 +50,15 @@ export const PHRASES = [
   "Nossa, entregou no prazo. Tá se sentindo bem?",
 ];
 
-// 5 frames side by side, 32x24 logical pixels each, drawn at 2x like the trainers:
-// 0 sitting, 1 sitting + blink, 2-3 sitting + chewing (head bobs, mouth opens), 4 asleep (lying down)
+// 7 frames side by side, 32x24 logical pixels each, drawn at 2x like the trainers:
+// 0 sitting, 1 sitting + blink, 2-3 sitting + chewing (head bobs, mouth opens), 4 asleep (lying down),
+// 5-6 walking on all fours (5 is also standing still). Drawn facing left; the texture is mirrored to face right.
 const W = 32,
   H = 24,
   P = 2,
-  FRAMES = 5;
+  FRAMES = 7;
 export const SLEEP_FRAME = 4;
+const WALK_FRAME = 5;
 const C = {
   light: "#c08a55",
   base: "#9c6a3c",
@@ -101,6 +104,13 @@ function drawFrame(c, f) {
     // lying flat, legs tucked in, head resting on the ground with the eyes shut
     blob(18, 17.5, 12, 4.8, 0);
     head(3, 12, "closed", false);
+  } else if (f >= WALK_FRAME) {
+    // on all fours: legs apart, then passing each other with the body a pixel higher
+    const pass = f - WALK_FRAME;
+    blob(19, 14 - pass, 10.5, 6.5, 0);
+    for (const lx of pass ? [11, 14, 23, 25] : [9, 14, 22, 27])
+      for (let y = 17; y < 22; y++) fill(lx, y, y > 19 ? C.darker : C.dark), fill(lx + 1, y, C.dark);
+    head(2, 5 - pass, "open", false);
   } else {
     const bob = f === 3 ? 1 : 0;
     // sitting: haunches on the ground at the back, chest raised, front legs straight
@@ -140,30 +150,26 @@ export function createCapybara() {
   mesh.castShadow = true;
   mesh.scale.set(5, 3.75, 1); // same pixel size as a trainer (5 units per 32px)
 
-  let chewUntil = 0,
-    last = -1;
-  const setFrame = (f) => (tex.offset.x = f / FRAMES);
-  let asleep = false;
+  let pose = "walk", // "walk" | "eat" (sitting, chewing) | "sit"
+    facing = -1; // -1 left (as drawn), 1 right (mirrored)
+  const setFrame = (f) => {
+    tex.repeat.x = -facing / FRAMES;
+    tex.offset.x = (facing < 0 ? f : f + 1) / FRAMES;
+  };
   return {
     mesh,
-    // a new phrase each time, never the same one twice in a row
-    feed(now) {
-      chewUntil = now + 2200;
-      let i;
-      do i = Math.floor(Math.random() * PHRASES.length);
-      while (i === last);
-      last = i;
-      return PHRASES[i];
+    setPose(p) {
+      pose = p;
     },
-    // asleep at night: lies down (and can only be fed by day)
-    setAsleep(v) {
-      asleep = v;
+    // which way it looks: -1 left, 1 right
+    setFacing(side) {
+      facing = side < 0 ? -1 : 1;
     },
-    isAsleep: (now) => asleep && now >= chewUntil,
-    update(now) {
-      if (now < chewUntil) setFrame(2 + (Math.floor(now / 180) % 2));
-      else if (asleep) setFrame(SLEEP_FRAME);
-      else setFrame(now % 4000 < 150 ? 1 : 0); // sitting, blinks every 4 s
+    // t: the room's clock in ms, so every player is on the same frame
+    update(t) {
+      if (pose === "walk") setFrame(WALK_FRAME + (Math.floor(t / 230) % 2));
+      else if (pose === "eat") setFrame(2 + (Math.floor(t / 180) % 2));
+      else setFrame(t % 4000 < 150 ? 1 : 0); // sitting, blinks every 4 s
     },
   };
 }

@@ -123,6 +123,10 @@ export function setupWall({ getName, getGender, isAdmin }) {
   const notes = new Map(); // id -> note
   const cards = new Map(); // id -> its paper on the cork
   let more = true, loading = false, open = false, color = "cream", total = 0, columns = [];
+  // the order of the wall: "top" (most liked first) or "new". The server pages it; `cursor` is where the next page starts
+  let sort = "top", cursor = null, round = 0;
+  try { if (localStorage.getItem("wall-sort") === "new") sort = "new"; } catch {}
+  const inOrder = (a, b) => (sort === "top" && (b.likes | 0) - (a.likes | 0)) || newestFirst(a, b);
   let editing = null; // id of the note being edited (the composer is reused), or null for a new one
   let draft = { text: "", color }; // a new note half written, kept while you edit another
 
@@ -133,7 +137,8 @@ export function setupWall({ getName, getGender, isAdmin }) {
     <div class="board" role="dialog" aria-label="message wall">
       <header>
         <b>message wall</b><small class="count"></small>
-        <button class="write" type="button">+ pin a note</button>
+        <div class="sort" role="group" aria-label="order"><button type="button" data-sort="top">♥ top</button><button type="button" data-sort="new">new</button></div>
+        <button class="write" type="button">+ pin<span> a note</span></button>
         <button class="close" type="button" aria-label="close">✕</button>
       </header>
       <div class="cork">
@@ -233,7 +238,7 @@ export function setupWall({ getName, getGender, isAdmin }) {
     const time = $("time", "", ago(n.at) + (n.edited ? " · edited" : ""));
     time.dataset.at = n.at;
     if (n.edited) time.title = "edited " + ago(n.edited);
-    foot.append($("span", "who " + n.gender, n.name), time);
+    foot.append($("span", "who " + n.gender, n.name), time, likeButton(n.id));
     el.append($("i", "pin"), text, foot);
     // your own note: edit and delete. The admin can delete any note. Deleting always asks first
     if (n.mine || isAdmin()) {
@@ -257,11 +262,80 @@ export function setupWall({ getName, getGender, isAdmin }) {
       const big = el.cloneNode(true);
       big.classList.remove("long", "new");
       big.querySelector(".acts")?.remove();
+      big.querySelector(".like").replaceWith(likeButton(n.id)); // a clone doesn't keep the click
       zoom.replaceChildren(big);
       zoom.hidden = false;
     });
     return el;
   }
+
+  // ---- likes ----
+  // every heart of a note on screen (its paper on the cork, and the same note opened big)
+  function paintLike(id, el) {
+    const n = notes.get(id);
+    for (const b of el ? [el] : root.querySelectorAll(".like")) {
+      if (b.dataset.id !== id || !n) continue;
+      b.textContent = "♥" + (n.likes > 0 ? " " + n.likes : "");
+      b.classList.toggle("on", !!n.liked);
+      b.setAttribute("aria-pressed", !!n.liked);
+      b.title = n.liked ? "unlike" : "like";
+    }
+  }
+  function likeButton(id) {
+    const b = $("button", "like");
+    b.type = "button";
+    b.dataset.id = id;
+    b.addEventListener("click", (e) => { e.stopPropagation(); like(id); });
+    paintLike(id, b);
+    return b;
+  }
+  const liking = new Set(); // notes with a like on its way
+  async function like(id) {
+    const n = notes.get(id);
+    if (!n || liking.has(id)) return;
+    liking.add(id);
+    const on = !n.liked;
+    // show it at once; the answer (or the room's broadcast) brings the real count
+    const set = (likes, liked) => { const x = notes.get(id); if (x) { x.likes = likes; x.liked = liked; paintLike(id); } };
+    set(Math.max(0, (n.likes | 0) + (on ? 1 : -1)), on);
+    try {
+      const r = await fetch(`/api/notes/${id}/like`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ key: wallKey(true), on }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error || "could not like it");
+      set(body.likes, body.liked);
+    } catch (x) {
+      set(Math.max(0, (notes.get(id)?.likes | 0) + (on ? -1 : 1)), !on);
+      for (const b of root.querySelectorAll(".like")) if (b.dataset.id === id) b.title = x.message;
+    }
+    liking.delete(id);
+  }
+  function onNoteLiked(id, likes) {
+    const n = notes.get(id);
+    if (!n || liking.has(id)) return; // our own like: its answer has the count
+    n.likes = likes;
+    paintLike(id);
+  }
+
+  // switching the order starts the wall over from the server
+  const sortButtons = [...root.querySelectorAll("[data-sort]")];
+  const markSort = () => sortButtons.forEach((b) => b.classList.toggle("on", b.dataset.sort === sort));
+  markSort();
+  sortButtons.forEach((b) => b.addEventListener("click", () => {
+    if (b.dataset.sort === sort) return;
+    sort = b.dataset.sort;
+    try { localStorage.setItem("wall-sort", sort); } catch {}
+    markSort();
+    round++; // a page still on its way belongs to the other order: drop it
+    notes.clear();
+    cursor = null;
+    more = true;
+    loading = false;
+    layout();
+    elCork.scrollTop = 0;
+    load();
+  }));
 
   // Masonry by hand: each note goes to the shortest column, so older notes loading in (or a new
   // one arriving) never reshuffle what you are reading, and the newest read left to right.
@@ -280,7 +354,7 @@ export function setupWall({ getName, getGender, isAdmin }) {
     columns = Array.from({ length: columnCount() }, () => $("div", "col"));
     elNotes.replaceChildren(...columns);
     cards.clear();
-    [...notes.values()].sort(newestFirst).forEach((n) => place(n, "append"));
+    [...notes.values()].sort(inOrder).forEach((n) => place(n, "append"));
     status();
   }
   function status() {
@@ -294,12 +368,14 @@ export function setupWall({ getName, getGender, isAdmin }) {
   async function load() {
     if (loading || !more) return;
     loading = true;
+    const mine = round;
     try {
-      const oldest = [...notes.keys()].sort()[0];
-      const key = wallKey(); // tells the server which notes are yours
-      const r = await fetch("/api/notes" + (oldest ? "?before=" + encodeURIComponent(oldest) : ""), key ? { headers: { "X-Wall-Key": key } } : {});
+      const key = wallKey(); // tells the server which notes are yours, and which you liked
+      const r = await fetch(`/api/notes?sort=${sort}` + (cursor ? "&after=" + encodeURIComponent(cursor) : ""), key ? { headers: { "X-Wall-Key": key } } : {});
       const body = await r.json();
-      more = body.more;
+      if (mine !== round) return;
+      cursor = body.next;
+      more = !!body.next;
       total = body.total;
       loading = false;
       for (const n of body.notes) {
@@ -308,6 +384,7 @@ export function setupWall({ getName, getGender, isAdmin }) {
         if (open) place(n, "append");
       }
     } catch {
+      if (mine !== round) return;
       loading = false;
       more = false;
     }
@@ -442,7 +519,7 @@ export function setupWall({ getName, getGender, isAdmin }) {
   function onNoteEdited(n) {
     const old = notes.get(n.id);
     if (!old) return; // not loaded here yet: it will come edited when it loads
-    notes.set(n.id, { ...n, mine: n.mine || (old.mine && !n.open) });
+    notes.set(n.id, { ...n, mine: n.mine || (old.mine && !n.open), liked: old.liked }); // what the room sends doesn't say what is yours
     if (open) place(notes.get(n.id));
     status();
   }
@@ -458,5 +535,5 @@ export function setupWall({ getName, getGender, isAdmin }) {
   }
 
   load(); // the board in town shows the latest notes
-  return { show, close, isOpen: () => open, onNote, onNoteEdited, onNoteDeleted, NEAR };
+  return { show, close, isOpen: () => open, onNote, onNoteEdited, onNoteDeleted, onNoteLiked, NEAR };
 }

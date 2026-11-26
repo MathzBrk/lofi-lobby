@@ -25,6 +25,13 @@
 #wall header .write { color: #1b1406; background: #ffc95a; border-color: #ffc95a; }
 #wall header .write:hover { background: #ffd47a; color: #1b1406; }
 #wall header .close { width: 34px; padding: 7px 0; }
+/* order of the wall: two buttons joined, the chosen one lit */
+#wall header .sort { display: flex; }
+#wall header .sort button { border-radius: 0; padding: 7px 10px; }
+#wall header .sort button:first-child { border-radius: 6px 0 0 6px; border-right: 0; }
+#wall header .sort button:last-child { border-radius: 0 6px 6px 0; }
+#wall header .sort button.on { color: #ffc95a; border-color: #ffc95a; background: rgba(255,201,90,.14); }
+#wall header .sort button.on + button { border-left-color: #ffc95a; }
 
 #wall .cork { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; border-radius: 4px; padding: 26px 22px;
   background-color: #b8864f;
@@ -56,7 +63,12 @@
 #wall .notes .paper.long time { margin-left: auto; }
 #wall .paper footer { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 8px;
   border-top: 1px dashed rgba(43,33,24,.25); font-family: Silkscreen, monospace; font-size: 10px; color: rgba(43,33,24,.65); }
-#wall .paper .who { color: #2b2118; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* like: a heart with the count, filled once you liked it */
+#wall .paper .like { order: 2; flex: none; font: inherit; line-height: 14px; color: rgba(43,33,24,.65); background: none; cursor: pointer;
+  border: 1px solid rgba(43,33,24,.3); border-radius: 9px; padding: 0 6px; margin: -1px 0; }
+#wall .paper .like:hover { color: #c0392b; border-color: #c0392b; }
+#wall .paper .like.on { color: #fff; background: #d9487a; border-color: #d9487a; }
+#wall .paper .who { color: #2b2118; margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #wall .paper .who::before { content: "♂ "; color: #3e7be0; } #wall .paper .who.female::before { content: "♀ "; color: #d9487a; }
 /* edit / delete: on your own notes (and delete for the admin), shown on hover or always on touch */
 #wall .paper .acts { position: absolute; top: 3px; right: 4px; display: flex; gap: 2px; opacity: 0; transition: opacity .1s; }
@@ -112,7 +124,8 @@
 @media (pointer: coarse), (max-width: 640px) {
   #wall { padding: 8px; padding-top: calc(8px + env(safe-area-inset-top)); }
   #wall .board { height: 100%; padding: 0 8px 8px; }
-  #wall header { gap: 8px; } #wall header b { font-size: 15px; } #wall header .count { display: none; }
+  #wall header { gap: 6px; } #wall header b { font-size: 13px; } #wall header .count { display: none; }
+  #wall header button { padding: 7px 8px; font-size: 11px; } #wall header .sort button { padding: 7px 6px; } #wall header .write span { display: none; }
   #wall header b { margin-right: auto; }
   #wall .cork { padding: 20px 12px; }
   #wall .notes { gap: 14px; }
@@ -121,12 +134,3 @@
   #wall .notes .paper.long footer::after { display: none; } /* no room: the fade says there is more */
   #wall .over { padding: 12px; align-items: flex-start; padding-top: calc(12px + env(safe-area-inset-top)); } /* above the phone keyboard */
 }
-
-/* the capybara asleep: a small chat-style bubble, bobbing gently */
-#capy-zzz { position: fixed; z-index: 1; transform: translate(-50%, -100%); pointer-events: none; font: inherit; font-size: 11px;
-  line-height: 14px; color: #F2F2F5; background: rgba(0,0,0,.74); padding: 4px 9px 11px; white-space: nowrap;
-  filter: drop-shadow(0 0 0.6px rgba(255,255,255,.55)); opacity: 0; transition: opacity .4s;
-  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(50% + 5px) calc(100% - 7px),
-                     50% 100%, calc(50% - 5px) calc(100% - 7px), 0 calc(100% - 7px)); }
-#capy-zzz.on { opacity: 1; animation: capy-zzz 2.4s ease-in-out infinite; }
-@keyframes capy-zzz { 50% { margin-top: -5px; } }

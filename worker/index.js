@@ -1,19 +1,25 @@
 // Room server: one Durable Object per room, everyone connected over WebSocket.
 // Protocol (JSON):
-//   client -> server: { t: "hello", name, gender, x, z, dir } | { t: "pos", x, z, dir, step }
+//   client -> server: { t: "hello", name, gender, color, x, z, dir } | { t: "pos", x, z, dir, step, run }
 //                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
+//                     { t: "color", color }   (name colour: one of NAME_COLORS)
 //                     { t: "sit", seat, n }   (bench seat 0..15 or -1 to stand; n numbers the request)
+//                     { t: "capy" }   (feed the capybara)
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
 //                     { t: "who", id, password }   (admin: who is this player)
 //                     { t: "mod", action: "kick"|"ban"|"unban", id, password }   (admin)
 //                     "ping" -> edge auto-responds "pong" (without waking the Durable Object)
-//   server -> client: { t: "you", id, v, token } | { t: "state", players: [...] }
+//   server -> client: { t: "you", id, v, now, token } (now: the room's clock, for what everyone must see at the same moment;
+//                                                     token: only this connection knows it, for /api/leave) | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
-//                     { t: "chat", id, name, text, at } | { t: "name", id, name }
+//                     { t: "chat", id, name, color, text, at } | { t: "name", id, name } | { t: "color", id, color }
 //                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
-//                     { t: "hold", item }   (what you hold while sitting: 0 nothing, 1 laptop, 2 coffee, 3 book)
+//                     { t: "hold", item }   (what you hold: 0 nothing, 1 laptop, 2 coffee, 3 book; the client decides when it shows)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
+//                     { t: "capy", at, until, lost, phrase }   (the capybara was fed: it sits from at to until, room clock;
+//                                                               lost = all its sitting before; phrase picks what it says.
+//                                                               Also sent on join, without phrase)
 //                     { t: "history", messages: [{ id, name, text, at }] } (on join)
 //                     { t: "notice", msg } | { t: "rename", name } (your name was refused)
 //                     { t: "who", id, tag, names, sameTag } (admin only)
@@ -28,12 +34,14 @@
 //  - allowed origins (ALLOWED_ORIGINS) so other sites can't use this server
 //  - per IP: few connections, shared chat budget, admin lockout, progressive mute for spam
 //  - all text is stripped of control characters and truncated; numbers finite and clamped
-//  - word filter: bad names refused, bad chat words become *** (worker/moderation.js)
+//  - word filter: bad names refused, bad chat words become LOBBA (worker/moderation.js)
 //  - admin kick (short IP ban) and ban (long IP ban), kept in storage
 //
 // Message wall (HTTP, a note is too long for a WebSocket frame): notes kept forever in this room's storage,
 // one key per note ("note:<time>-<id>"), so there is no limit on how many.
-//   GET /api/notes?before=<id>  newest first, NOTES_PAGE at a time
+//   GET /api/notes?sort=top|new&after=<cursor>  NOTES_PAGE at a time; the answer's `next` is the cursor of the next page.
+//                                  new: newest first. top: most liked first (newest first among equals), then the rest
+//   POST /api/notes/<id>/like { key, on }  like or unlike: one like per wall key, at most LIKES_PER_IP per IP on a note
 //   POST /api/notes { name, gender, text, color, key }  one per NOTE_EVERY_MS per IP, banned IPs refused,
 //                                                  same cleaning and word filter as names and chat, no links
 //   PATCH /api/notes/<id> { text, color, key }  the writer edits their note
@@ -41,7 +49,9 @@
 //   DELETE /api/notes/<id>  the writer (X-Wall-Key header) or the admin (password in the Authorization header)
 // A note belongs to whoever holds its "wall key" (random, kept in the writer's browser; the note stores its hash).
 // New, edited and deleted notes also go out on the WebSocket:
-//   { t: "note", note } | { t: "note-edit", note } | { t: "note-del", id }
+//   { t: "note", note } | { t: "note-edit", note } | { t: "note-del", id } | { t: "note-like", id, likes }
+// Likes: the note carries its count ("likes"); who liked it is "likes:<note id>" ({ wall key hash: IP tag }, never
+// the IP); "top:<count>:<note id>" is the index the top order is read from (only notes with a like are in it).
 //
 // Stats (Workers Analytics Engine, dataset "lofi_lobby"): one data point per join, leave and chat.
 // No IP, name or chat text is stored: a visitor is a hash of IP + day, only good for counting uniques.
@@ -80,8 +90,16 @@ const NOTE_EVERY_MS = 60_000; // one note per minute per IP
 const NOTES_PAGE = 30;
 const NOTE_EDIT_EVERY_MS = 5_000;
 const NOTE_COLORS = ["cream", "yellow", "pink", "blue", "green", "lilac"];
+// the capybara: fed, it sits for a while, and then walks a little before it can be fed again
+const CAPY_SIT_MS = 6000;
+const CAPY_REST_MS = 3000;
+const LIKES_PER_IP = 3; // on one note: a house can share an IP, a like farm can't hide behind fresh wall keys
+const LIKES_MAX = 2000; // likers kept per note (one storage value)
+const NOTE_ID = /^note:\d{15}-[a-z0-9]{6}$/;
+const AFTER_EVERY_NOTE = "note:999999999999999-zzzzzz"; // a cursor above every note id
+const topKey = (likes, id) => `top:${String(likes).padStart(6, "0")}:${id}`;
 // rate buckets: capacity, refill per second
-const RATES = { pos: [30, 20], chat: [8, 1], sit: [20, 6], other: [10, 1] };
+const RATES = { pos: [30, 20], chat: [8, 1], sit: [20, 6], like: [30, 0.5], other: [10, 1] };
 const HEARTBEAT_CHECK_MS = 60_000;
 const HEARTBEAT_TIMEOUT_MS = 120_000; // > 60s background tab timer throttling
 const LEAVE_BYTES = 256;
@@ -130,6 +148,10 @@ const number = (v) => {
   return Number.isFinite(n) ? Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, n)) : 0;
 };
 const gender = (g) => (g === "female" ? "female" : "male");
+// name colours: the client sends a name from this list, never a CSS value ("" = the default colour).
+// Each browser paints it with its own hex for that name (NAME_COLORS in src/main.js).
+const NAME_COLORS = ["coral", "peach", "lime", "mint", "aqua", "sky", "lilac", "orchid", "pink", "rose"];
+const nameColor = (c) => (NAME_COLORS.includes(c) ? c : "");
 
 // constant-time compare (timing doesn't leak how many characters match)
 function equal(a, b) {
@@ -235,11 +257,45 @@ export class Room {
     const json = (body, status = 200) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
     const del = url.pathname.replace("%3A", ":").match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})$/);
     if (req.method === "GET" && url.pathname === "/api/notes") {
-      const before = /^note:\d{15}-[a-z0-9]{6}$/.test(url.searchParams.get("before") || "") ? url.searchParams.get("before") : null;
-      const page = await this.state.storage.list({ prefix: "note:", reverse: true, limit: NOTES_PAGE + 1, ...(before && { end: before }) });
+      const top = url.searchParams.get("sort") === "top";
+      const given = url.searchParams.get("after") || "";
+      const cursor = NOTE_ID.test(given) || (top && /^top:\d{6}:note:\d{15}-[a-z0-9]{6}$/.test(given)) ? given : null;
       const owner = await ownerOf(req.headers.get("X-Wall-Key"));
-      const notes = [...page].slice(0, NOTES_PAGE).map(([id, n]) => shown(id, n, owner));
-      return json({ notes, more: page.size > NOTES_PAGE, total: await this.noteCount() });
+      const { page, next } = top ? await this.topNotes(cursor) : await this.newNotes(cursor);
+      // which of these the one asking has liked
+      const mine = owner && page.some(([, n]) => n.likes > 0) ? await this.state.storage.get(page.map(([id]) => "likes:" + id)) : null;
+      const notes = page.map(([id, n]) => ({ ...shown(id, n, owner), ...(mine?.get("likes:" + id)?.[owner.slice(0, 16)] && { liked: true }) }));
+      return json({ notes, next, total: await this.noteCount() });
+    }
+    // like or unlike a note. One like per wall key; the IP tag kept beside it caps how many one network can give
+    const like = url.pathname.replace("%3A", ":").match(/^\/api\/notes\/(note:\d{15}-[a-z0-9]{6})\/like$/);
+    if (req.method === "POST" && like) {
+      if (!(Number(req.headers.get("Content-Length")) <= 200)) return json({ error: "bad request" }, 400);
+      let m;
+      try { m = JSON.parse(await req.text()); } catch { return json({ error: "bad request" }, 400); }
+      const who = (await ownerOf(m?.key))?.slice(0, 16);
+      if (!who) return json({ error: "bad request" }, 400);
+      const tag = await this.tagOf(ip);
+      if (!this.allowed({ ip }, "like")) return json({ error: "slow down" }, 429);
+      const id = like[1];
+      // nothing awaits anything but storage from here on, so two likes at once can't lose one
+      const [ban, note, likers = {}] = await Promise.all([this.state.storage.get("ban:" + ip), this.state.storage.get(id), this.state.storage.get("likes:" + id)]);
+      if (ban > Date.now()) return json({ error: "you are banned" }, 403);
+      if (!note) return json({ error: "this note is gone" }, 404);
+      const had = Object.hasOwn(likers, who);
+      const on = m.on !== false;
+      const was = note.likes | 0;
+      if (on === had) return json({ likes: was, liked: had });
+      if (on) {
+        if (Object.values(likers).filter((t) => t === tag).length >= LIKES_PER_IP) return json({ error: "too many likes from this network" }, 429);
+        if (Object.keys(likers).length >= LIKES_MAX) return json({ error: "this note has all the likes it can hold" }, 409);
+        likers[who] = tag;
+      } else delete likers[who];
+      const likes = Object.keys(likers).length;
+      await this.state.storage.delete([...(was ? [topKey(was, id)] : []), ...(likes ? [] : ["likes:" + id])]);
+      await this.state.storage.put({ [id]: { ...note, likes }, ...(likes && { ["likes:" + id]: likers, [topKey(likes, id)]: 1 }) });
+      this.broadcast({ t: "note-like", id, likes });
+      return json({ likes, liked: on });
     }
     if (req.method === "POST" && url.pathname === "/api/notes") {
       // the body is read before any check, so nothing awaits between the rate check and its write
@@ -310,18 +366,49 @@ export class Room {
     if (req.method === "DELETE" && del) {
       // the writer (their wall key) or the admin (password, same lockout as everywhere)
       const owner = await ownerOf(req.headers.get("X-Wall-Key"));
-      const note = owner && (await this.state.storage.get(del[1]));
-      if (!(note?.owner && equal(owner, note.owner))) {
+      const note = await this.state.storage.get(del[1]);
+      if (!(owner && note?.owner && equal(owner, note.owner))) {
         if (owner && !req.headers.get("Authorization")) return json({ error: "this note is not yours" }, 403);
         const check = await this.checkAdmin(ip, (req.headers.get("Authorization") || "").replace(/^Bearer /, ""));
         if (!check.ok) return json({ error: check.msg }, 401);
       }
       let total = await this.noteCount();
       if (await this.state.storage.delete(del[1])) await this.state.storage.put("note-count", (total = Math.max(0, total - 1)));
+      await this.state.storage.delete(["likes:" + del[1], topKey(note?.likes | 0, del[1])]); // its likes go with it
       this.broadcast({ t: "note-del", id: del[1], total });
       return json({ ok: true });
     }
     return json({ error: "not found" }, 404);
+  }
+  // a page of the wall, newest first: [[id, note], ...] and the cursor of the next page (null at the end)
+  async newNotes(cursor) {
+    const found = [...(await this.state.storage.list({ prefix: "note:", reverse: true, limit: NOTES_PAGE + 1, ...(cursor && { end: cursor }) }))];
+    const page = found.slice(0, NOTES_PAGE);
+    return { page, next: found.length > NOTES_PAGE ? page.at(-1)[0] : null };
+  }
+  // most liked first: the liked notes in the order of the "top:" index, then the ones nobody liked, newest first.
+  // The cursor is a "top:" key while in the first part and a note id in the second.
+  async topNotes(cursor) {
+    const page = [];
+    if (!cursor || cursor.startsWith("top:")) {
+      const keys = [...(await this.state.storage.list({ prefix: "top:", reverse: true, limit: NOTES_PAGE + 1, ...(cursor && { end: cursor }) })).keys()];
+      const ids = keys.slice(0, NOTES_PAGE).map((k) => k.slice(11));
+      const got = ids.length ? await this.state.storage.get(ids) : new Map();
+      for (const id of ids) if (got.has(id)) page.push([id, got.get(id)]);
+      if (keys.length > NOTES_PAGE) return { page, next: keys[NOTES_PAGE - 1] };
+      cursor = AFTER_EVERY_NOTE;
+    }
+    // a few rounds at most: a long run of liked notes gives a short page, and the cursor carries on
+    for (let round = 0; round < 5 && page.length < NOTES_PAGE; round++) {
+      const found = [...(await this.state.storage.list({ prefix: "note:", reverse: true, limit: 100, end: cursor }))];
+      for (const [id, n] of found) {
+        if (page.length === NOTES_PAGE) return { page, next: cursor };
+        cursor = id;
+        if (!(n.likes > 0)) page.push([id, n]);
+      }
+      if (found.length < 100) return { page, next: null };
+    }
+    return { page, next: cursor };
   }
   // how many notes the wall holds (kept beside them, so nobody has to list them all)
   async noteCount() {
@@ -410,13 +497,15 @@ export class Room {
     // hibernation: the DO can sleep with connections open; each player's
     // state lives on its own socket (serializeAttachment)
     this.state.acceptWebSocket(server);
-    server.serializeAttachment({ id, leaveToken, connectedAt, name: "trainer", gender: "male", x: 0, z: 0, dir: "down", step: 0, seat: -1, ip,
+    server.serializeAttachment({ id, leaveToken, connectedAt, name: "trainer", gender: "male", color: "", x: 0, z: 0, dir: "down", step: 0, seat: -1, ip,
       country: String(req.cf?.country || "").slice(0, 2), visitor: await visitorOf(ip) });
     await this.ensureHeartbeatAlarm();
     // v: the deploy that is running. A tab that reconnects and sees another one reloads itself.
-    server.send(JSON.stringify({ t: "you", id, v: this.env.VERSION?.id || "", token: leaveToken }));
+    server.send(JSON.stringify({ t: "you", id, v: this.env.VERSION?.id || "", now: Date.now(), token: leaveToken }));
     const radio = await this.state.storage.get("radio");
     if (radio) server.send(JSON.stringify({ t: "radio", command: radio }));
+    const capy = await this.state.storage.get("capy");
+    if (capy) server.send(JSON.stringify({ t: "capy", ...capy }));
     const messages = await this.history();
     if (messages.length) server.send(JSON.stringify({ t: "history", messages }));
     server.send(JSON.stringify({ t: "state", players: this.players().filter((p) => p.id !== id) }));
@@ -425,7 +514,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
   }
   players() {
     return this.openSockets()
@@ -483,6 +572,7 @@ export class Room {
       if (p.joinedAt) return;
       p.name = this.nameFor(ws, m.name);
       p.gender = gender(m.gender);
+      p.color = nameColor(m.color);
       // where the player already is (a reconnect, or a saved spot), so others see them there at once
       p.x = number(m.x);
       p.z = number(m.z);
@@ -496,6 +586,10 @@ export class Room {
       p.gender = gender(m.gender);
       ws.serializeAttachment(p);
       this.broadcast({ t: "gender", id: p.id, gender: p.gender }, ws);
+    } else if (m.t === "color") {
+      p.color = nameColor(m.color);
+      ws.serializeAttachment(p);
+      this.broadcast({ t: "color", id: p.id, color: p.color }, ws);
     } else if (m.t === "name") {
       p.name = this.nameFor(ws, m.name);
       ws.serializeAttachment(p);
@@ -507,7 +601,8 @@ export class Room {
       p.dir = DIRS.includes(m.dir) ? m.dir : "down";
       p.step = Math.abs(m.step | 0) % 4;
       ws.serializeAttachment(p);
-      this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step }, ws);
+      // run: the sender is running (others draw the run frames); not kept, the next pos says it again
+      this.broadcast({ t: "pos", id: p.id, x: p.x, z: p.z, dir: p.dir, step: p.step, ...(m.run && { run: 1 }) }, ws);
     } else if (m.t === "sit") {
       // one player per seat; -1 stands up. A taken seat is refused back to the sender only,
       // with the seat the room really has for them
@@ -520,8 +615,18 @@ export class Room {
       ws.serializeAttachment(p);
       // not back to the sender: it already moved, and a late echo would undo a quick sit/stand
       this.broadcast({ t: "seat", id: p.id, seat }, ws);
+    } else if (m.t === "capy") {
+      // Someone fed the capybara. The clients walk it by the room's clock; a feeding stops that clock
+      // for it from `at` to `until`, and `lost` adds up every stop before, so everyone computes the
+      // same spot. One feeding at a time, with a rest after: it can't be kept sitting forever.
+      const now = Date.now();
+      const c = (await this.state.storage.get("capy")) || { at: 0, until: 0, lost: 0 };
+      if (now < c.until + CAPY_REST_MS) return;
+      const fed = { at: now, until: now + CAPY_SIT_MS, lost: c.lost + (c.until - c.at) };
+      await this.state.storage.put("capy", fed);
+      this.broadcast({ t: "capy", ...fed, phrase: Math.floor(Math.random() * 1000) });
     } else if (m.t === "hold") {
-      // what the player holds on a bench; the client only draws it on someone seated
+      // what the player holds; the client draws it on someone seated, and the coffee also on someone standing still
       p.hold = [1, 2, 3].includes(m.item) ? m.item : 0;
       ws.serializeAttachment(p);
       this.broadcast({ t: "hold", id: p.id, item: p.hold }, ws);
@@ -560,7 +665,7 @@ export class Room {
       if (s.repeats > REPEAT_LIMIT) return this.strike(ws, p.ip);
       s.lastText = text;
       s.lastAt = now;
-      const msg = { id: p.id, name: p.name, text, at: now, ...(p.admin && { admin: true }) };
+      const msg = { id: p.id, name: p.name, text, at: now, ...(p.color && { color: p.color }), ...(p.admin && { admin: true }) };
       this.broadcast({ t: "chat", ...msg });
       this.stat("chat", p);
       await this.saveHistory([...(await this.history()), msg]);

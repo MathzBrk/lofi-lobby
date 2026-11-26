@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
 import { createBoard, setupWall } from "./board.js";
-import { createCapybara, CAPY_NEAR, CAPY_RADIUS } from "./capybara.js";
+import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
 
 // ---- Asset config (change here to use other files) ----
 const TOWN = {
@@ -240,6 +240,7 @@ function prepareTown(fbx) {
     placeFireflies();
     board.position.y = groundHeight(board.position.x, board.position.z);
     placeCapybara();
+    placeCapyWalk();
 }
 
 // ---- Original village (default on the published site) ----
@@ -1171,6 +1172,63 @@ function placeCapybara() {
     }
 }
 
+// The capybara's walk: it goes left and right on the right end of the lower road (the sand path), in
+// front of the house on the right, and sits down to eat when someone feeds it. It is the same for
+// everyone, frame by frame: where it is depends only on the room's clock and on `capyFed`, the last
+// feeding, which the room keeps and sends to all (worker/index.js, "capy"). Nothing here may depend
+// on one player (day or night, who stands near): that would put it somewhere else on their screen.
+const CAPY_ROAD_Z = 19.4; // the lower half of the path, off the line people walk
+const CAPY_REACH = 20; // how far from the middle it goes, at most
+const CAPY_SPEED = 1.5; // units per second: a slow stroll
+const capyWalk = { on: false, min: 0, max: 0, yAt: NaN };
+let clockOffset = 0; // the room's clock minus this device's (from the "you" message)
+function placeCapyWalk() {
+  const z = CAPY_ROAD_Z;
+  const clear = (x) =>
+    !inPond(x, z) && !insideSolid(x, z, 1, 1) && Math.abs(topHeight(x, z) - groundHeight(x, z)) < 0.4 &&
+    lampPosts.every((l) => Math.hypot(l.position.x - x, l.position.z - z) > 2.5) &&
+    benches.every((b) => Math.hypot(b.x - x, b.z - z) > 3.2);
+  // a house front looks at this stretch of road: a ray going north at window height meets a wall facing us
+  const houseBehind = (x) => {
+    ray.set(new THREE.Vector3(x, groundHeight(x, z) + 4.4, z), new THREE.Vector3(0, 0, -1));
+    const hit = ray.intersectObjects(townMeshes, false)[0];
+    return !!hit?.face && hit.distance < 14 && hit.face.normal.clone().transformDirection(hit.object.matrixWorld).z > 0.8;
+  };
+  // the first run of road on the right side with a house behind it
+  let min = NaN,
+    max = NaN;
+  for (let x = 0.5; x <= CAPY_REACH; x += 0.5) {
+    if (clear(x) && houseBehind(x)) (max = x), Number.isNaN(min) && (min = x);
+    else if (!Number.isNaN(min)) break;
+  }
+  if (!(max - min >= 6)) return; // no such road in this town: it stays where it is
+  Object.assign(capyWalk, { on: true, min, max });
+  capy.mesh.position.z = z;
+  capy.setPose("walk");
+}
+// The last feeding: it sat from `at` to `until` (room clock, ms); `lost` is all the sitting before that.
+let capyFed = { at: 0, until: 0, lost: 0 };
+const roomNow = () => Date.now() + clockOffset;
+// where the room's clock puts it: there and back at one speed, standing still on the clock while it sits
+function walkCapy(t) {
+  const eating = t >= capyFed.at && t < capyFed.until;
+  capy.setPose(eating ? "eat" : capyWalk.on ? "walk" : "sit");
+  if (!capyWalk.on) return;
+  const walked = (t < capyFed.at ? t : eating ? capyFed.at : t - (capyFed.until - capyFed.at)) - capyFed.lost;
+  const length = capyWalk.max - capyWalk.min;
+  const along = ((walked / 1000) * CAPY_SPEED) % (2 * length);
+  const m = capy.mesh.position;
+  m.x = capyWalk.min + (along < length ? along : 2 * length - along);
+  if (!(Math.abs(m.x - capyWalk.yAt) < 0.5)) m.y = groundHeight((capyWalk.yAt = m.x), m.z); // follows the ground, checked every half unit
+  capy.setFacing(along < length ? 1 : -1);
+}
+// the room says it was fed (to everyone at once), or on joining says how things stand (no phrase)
+function capyWasFed(m) {
+  if (![m.at, m.until, m.lost].every(Number.isFinite)) return;
+  capyFed = { at: m.at, until: m.until, lost: m.lost };
+  if (Number.isInteger(m.phrase)) showBubble(capy.mesh, CAPY_PHRASES[Math.abs(m.phrase) % CAPY_PHRASES.length]);
+}
+
 // ---- Collision ----
 const BODY_RADIUS = 0.9; // character "width"
 const MAX_STEP = 1.2; // height difference it can climb
@@ -1192,7 +1250,9 @@ function isFree(x, z, currentY) {
     inPond(x, z + BODY_RADIUS)
   )
     return false;
-  if (Math.hypot(x - capy.mesh.position.x, z - capy.mesh.position.z) < CAPY_RADIUS + BODY_RADIUS * 0.5) return false;
+  // the capybara is solid, but it moves: a step that takes you away from it is always allowed
+  const toCapy = Math.hypot(x - capy.mesh.position.x, z - capy.mesh.position.z);
+  if (toCapy < CAPY_RADIUS + BODY_RADIUS * 0.5 && toCapy < Math.hypot(pos.x - capy.mesh.position.x, pos.z - capy.mesh.position.z)) return false;
   if (Math.abs(x - board.position.x) < 3.8 + BODY_RADIUS * 0.5 && Math.abs(z - board.position.z) < 0.5 + BODY_RADIUS * 0.5) return false;
   for (const p of lampPosts)
     if (
@@ -1622,7 +1682,8 @@ const SPEED = 9;
 // ---- Sitting ----
 let mySeat = -1;
 
-// What you hold while sitting: nothing, a laptop on your lap, a coffee or a book. Pixel art drawn
+// What you hold while sitting: nothing, a laptop on your lap, a coffee or a book. The coffee also stays
+// in your hand while you stand still (it goes away while you walk). Pixel art drawn
 // in code on the trainer's own 32px frame, on a plane that sits exactly over the trainer and takes
 // the same depth (its feet), so it is covered and uncovered together with the body.
 const HELD = ["nothing", "a laptop", "a coffee", "a book"];
@@ -1743,13 +1804,17 @@ function createHeld(feet) {
   scene.add(mesh);
   return mesh;
 }
-// put the item over its trainer (or hide it when not seated or holding nothing)
-function showHeld(mesh, body, cfg, item, seat) {
-  mesh.visible = !!(item && seat);
+// which way the item is drawn for a trainer, or null when it doesn't show: anything on a bench,
+// and the coffee while standing still
+const COFFEE = 2;
+const heldDir = (item, seat, still, d) => (!item ? null : seat ? seat.dir : item === COFFEE && still ? d : null);
+// put the item over its trainer, seen from direction d (or hide it: d is null)
+function showHeld(mesh, body, cfg, item, d) {
+  mesh.visible = !!(item && d);
   if (!mesh.visible) return;
-  const shape = bodyShape(body.material.map, cfg, seat.dir);
+  const shape = bodyShape(body.material.map, cfg, d);
   if (!shape) return void (mesh.visible = false);
-  [mesh.material.map, mesh.material.emissiveMap] = heldTextures(item, seat.dir, shape);
+  [mesh.material.map, mesh.material.emissiveMap] = heldTextures(item, d, shape);
   mesh.position.copy(body.position);
   mesh.rotation.copy(body.rotation);
 }
@@ -1767,18 +1832,21 @@ const HELD_ICONS = [
   '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
 ];
 let holdIcon = 0;
+// Q on a bench goes through everything; standing, it only picks the coffee up and puts it away
+const nextHold = () => (mySeat >= 0 ? (myHold + 1) % HELD.length : myHold === COFFEE ? 0 : COFFEE);
 function updateHoldButton() {
-  holdBtn.hidden = mySeat < 0;
-  holdBtn.classList.toggle("on", myHold > 0);
-  holdBtn.setAttribute("aria-label", "hold " + HELD[(myHold + 1) % HELD.length]);
-  if (holdIcon !== myHold) holdBtn.querySelector("svg").innerHTML = HELD_ICONS[(holdIcon = myHold)];
+  const shown = mySeat >= 0 || myHold === COFFEE ? myHold : 0; // a laptop or a book waits for a bench
+  holdBtn.hidden = false;
+  holdBtn.classList.toggle("on", shown > 0);
+  holdBtn.setAttribute("aria-label", "hold " + HELD[nextHold()]);
+  if (holdIcon !== shown) holdBtn.querySelector("svg").innerHTML = HELD_ICONS[(holdIcon = shown)];
 }
 let lastHold = 0;
 function cycleHold() {
   const now = performance.now();
-  if (gamePaused || mySeat < 0 || now - lastHold < 350) return; // stays under the server's rate limit
+  if (gamePaused || now - lastHold < 350) return; // stays under the server's rate limit
   lastHold = now;
-  myHold = (myHold + 1) % HELD.length;
+  myHold = nextHold();
   try { localStorage.setItem("hold", myHold); } catch {}
   sendHold();
 }
@@ -1916,6 +1984,58 @@ function changeName(newName) {
 // the enter/pause screen has its own name field: fill it in and apply it on enter
 window.applyName = changeName;
 const elEnterName = document.querySelector("#enter-name");
+
+// Name colour: the player picks one on the enter/pause screen; a first visit gets a random one.
+// Only the colour's name travels (the server refuses anything outside its list); the hex lives here.
+// All light and saturated enough to read on the dark chat panel and, outlined, over the grass.
+// No gold: that is the admin's.
+const NAME_COLORS = {
+  coral: "#ff8a7a", peach: "#ffb07a", lime: "#b6e36a", mint: "#6fe3b0", aqua: "#5fd8e8",
+  sky: "#7db8ff", lilac: "#b9a2ff", orchid: "#de8cf0", pink: "#ff9ad5", rose: "#ff7fa8",
+};
+// paint an element with a player's colour (CSS reads --name); an unknown colour keeps the default
+const paintName = (el, color) =>
+  NAME_COLORS[color] ? el.style.setProperty("--name", NAME_COLORS[color]) : el.style.removeProperty("--name");
+let COLOR = "";
+try { COLOR = localStorage.getItem("name-color"); } catch {}
+if (!NAME_COLORS[COLOR]) {
+  const all = Object.keys(NAME_COLORS);
+  COLOR = all[Math.floor(Math.random() * all.length)];
+  try { localStorage.setItem("name-color", COLOR); } catch {}
+}
+// the same row of swatches twice: on the enter/pause screen and, in-game, behind the dot next to "you: <name>"
+const colorButtons = [];
+for (const row of document.querySelectorAll("#name-colors, #my-colors"))
+  for (const [name, hex] of Object.entries(NAME_COLORS)) {
+    const b = Object.assign(document.createElement("button"), { type: "button", title: name });
+    b.dataset.color = name;
+    b.style.setProperty("--c", hex);
+    b.setAttribute("role", "radio");
+    b.setAttribute("aria-label", name);
+    b.addEventListener("click", () => {
+      applyColor(name);
+      elMyColors.hidden = true; // the in-game row closes once you pick
+    });
+    row.append(b);
+    colorButtons.push(b);
+  }
+const elMyColors = document.querySelector("#my-colors");
+document.querySelector("#my-color").addEventListener("click", () => (elMyColors.hidden = !elMyColors.hidden));
+function applyColor(color) {
+  const changed = color !== COLOR;
+  COLOR = color;
+  for (const b of colorButtons) {
+    b.classList.toggle("on", b.dataset.color === COLOR);
+    b.setAttribute("aria-checked", b.dataset.color === COLOR);
+  }
+  paintName(document.querySelector("#place .me"), COLOR); // the name and the dot next to it
+  paintName(elEnterName, COLOR);
+  if (!changed) return;
+  try { localStorage.setItem("name-color", COLOR); } catch {}
+  if (MULTIPLAYER && ws?.readyState === 1)
+    ws.send(JSON.stringify({ t: "color", color: COLOR }));
+}
+applyColor(COLOR);
 elEnterName.value = NAME;
 addEventListener("game:pause", (e) => e.detail && (elEnterName.value = NAME));
 elName.addEventListener("click", () => {
@@ -2011,6 +2131,8 @@ function createOther(p) {
     seat: Number.isInteger(p.seat) ? p.seat : -1,
     hold: p.hold | 0,
     name: p.name,
+    gender: g,
+    color: p.color,
     admin: !!p.admin,
   };
   mesh.position.copy(o.target);
@@ -2049,7 +2171,7 @@ function connect() {
     pingTimer = setInterval(() => {
       if (sock.readyState === 1) sock.send("ping");
     }, PING_EVERY_MS);
-    sock.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
+    sock.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, color: COLOR, x: pos.x, z: pos.z, dir }));
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
     if (myHold) sendHold();
     // a saved admin logs in again quietly, so everyone sees the admin badge
@@ -2062,6 +2184,7 @@ function connect() {
     const m = JSON.parse(ev.data);
     if (m.t === "you") {
       myId = m.id;
+      if (Number.isFinite(m.now)) clockOffset = m.now - Date.now(); // the capybara walks by the room's clock
       myLeaveToken = m.token || "";
       // the room reconnected us to a newer deploy than the one this tab loaded with: reload to get
       // it, but not in the middle of something being written
@@ -2075,17 +2198,19 @@ function connect() {
     else if (m.t === "state") m.players.forEach(createOther);
     else if (m.t === "joined") createOther(m.player);
     else if (m.t === "left") removeOther(m.id);
-    else if (m.t === "chat") receiveChat(m.id, m.name, m.text, m.admin);
+    else if (m.t === "chat") receiveChat(m.id, m.name, m.text, m.admin, m.color);
     else if (m.t === "history") {
       // what was said before we arrived (also on reconnect, so start clean)
       elMsgs.replaceChildren();
-      m.messages.forEach((c) => addToHistory(c.name, c.text, c.id, c.admin));
+      m.messages.forEach((c) => addToHistory(c.name, c.text, c.id, c.admin, c.color));
       elMsgs.scrollTop = elMsgs.scrollHeight;
     }
     else if (m.t === "radio") receiveCommand(m.command);
     else if (m.t === "note") wall.onNote(m.note, m.total);
     else if (m.t === "note-edit") wall.onNoteEdited(m.note);
     else if (m.t === "note-del") wall.onNoteDeleted(m.id, m.total);
+    else if (m.t === "note-like") wall.onNoteLiked(m.id, m.likes);
+    else if (m.t === "capy") capyWasFed(m);
     else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
     else if (m.t === "rename") {
       // the server refused our name and gave us another one
@@ -2112,6 +2237,9 @@ function connect() {
     else if (m.t === "name") {
       const o = others.get(m.id);
       if (o) o.name = m.name;
+    } else if (m.t === "color") {
+      const o = others.get(m.id);
+      if (o) o.color = m.color;
     } else if (m.t === "gender") {
       // recreate the character with the other gender's look, keeping the position
       const o = others.get(m.id);
@@ -2124,6 +2252,7 @@ function connect() {
           step: o.step,
           seat: o.seat,
           name: o.name,
+          color: o.color,
           gender: m.gender,
           admin: o.admin,
         };
@@ -2147,9 +2276,11 @@ function connect() {
       }
     } else if (m.t === "pos") {
       const o = others.get(m.id) || createOther(m);
+      if (o.target.x !== m.x || o.target.z !== m.z) o.movedAt = performance.now();
       o.target.set(m.x, 0, m.z);
       o.dir = m.dir;
       o.step = m.step;
+      o.run = !!m.run;
     }
   };
   sock.onclose = () => {
@@ -2196,13 +2327,13 @@ if (MULTIPLAYER) {
 
 let lastSend = 0,
   lastState = "";
-function sendPosition(now, step) {
+function sendPosition(now, step, running) {
   if (!ws || ws.readyState !== 1 || now - lastSend < 66) return; // ~15x/s
-  const state = `${pos.x.toFixed(2)},${pos.z.toFixed(2)},${dir},${step}`;
+  const state = `${pos.x.toFixed(2)},${pos.z.toFixed(2)},${dir},${step},${running}`;
   if (state === lastState) return;
   lastSend = now;
   lastState = state;
-  ws.send(JSON.stringify({ t: "pos", x: pos.x, z: pos.z, dir, step }));
+  ws.send(JSON.stringify({ t: "pos", x: pos.x, z: pos.z, dir, step, ...(running && { run: 1 }) }));
 }
 
 function updateOthers(dt) {
@@ -2224,8 +2355,15 @@ function updateOthers(dt) {
       o.target.set(seat.x, 0, seat.z);
     } else m.position.y = topHeight(m.position.x, m.position.z);
     m.rotation.copy(sprite.rotation);
-    setFrameTex(o.tex, o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
-    if (o.held || (o.hold && seat)) showHeld((o.held ??= createHeld(o.feet)), m, o.cfg, o.hold, seat);
+    // running uses the run frames of the same sheet, like your own trainer (not on the code-drawn fallback)
+    const running = o.run && !seat && o.cfg === CROP[o.gender];
+    setFrameTex(o.tex, running ? RUN_CROP[o.gender] : o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
+    m.userData.lift = running && o.gender === "male" ? 0.8 : 0; // the male run frames sit higher in their cell
+    m.position.y -= m.userData.lift;
+    // standing still: on the standing frame, a moment after the last step arrived
+    const still = !o.step && performance.now() - (o.movedAt || 0) > 300;
+    const hd = heldDir(o.hold, seat, still, o.dir);
+    if (o.held || hd) showHeld((o.held ??= createHeld(o.feet)), m, o.cfg, o.hold, hd);
   }
 }
 
@@ -2236,11 +2374,12 @@ const bubbles = new Map(); // owner (mesh) -> { el, until }
 // any text field (chat or the admin login): game keys and the Enter shortcut stay out of it
 const typing = () => ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
 
-function addToHistory(name, text, id, admin) {
+function addToHistory(name, text, id, admin, color) {
   const d = document.createElement("div");
   d.className = admin ? "m admin" : "m";
   const s = document.createElement("small");
   s.textContent = name;
+  paintName(s, color);
   if (IS_ADMIN && id && id !== myId && id !== "me") {
     s.className = "mod";
     s.addEventListener("click", (e) => openModMenu(e, id, name));
@@ -2316,7 +2455,7 @@ function showWho(m) {
 
 // ---- Name above each trainer ----
 const nameTags = new Map(); // mesh -> div
-function nameTag(mesh, name, id, admin) {
+function nameTag(mesh, name, id, admin, color) {
   let el = nameTags.get(mesh);
   if (!el) {
     el = Object.assign(document.createElement("div"), { className: "tag" });
@@ -2332,14 +2471,15 @@ function nameTag(mesh, name, id, admin) {
     nameTags.set(mesh, el);
   }
   if (el.lastChild.textContent !== name) el.lastChild.textContent = name;
+  if (el.dataset.color !== (color || "")) paintName(el, (el.dataset.color = color || ""));
   el.classList.toggle("admin", !!admin);
 }
 function updateNameTags() {
-  nameTag(sprite, NAME, null, meAdmin);
-  for (const [id, o] of others) nameTag(o.mesh, o.name || "trainer", id, o.admin);
+  nameTag(sprite, NAME, null, meAdmin, COLOR);
+  for (const [id, o] of others) nameTag(o.mesh, o.name || "trainer", id, o.admin, o.color);
   for (const [mesh, el] of nameTags) {
     if (!mesh.parent) { el.remove(); nameTags.delete(mesh); continue; }
-    const baseY = mesh === sprite ? pos.y : mesh.position.y;
+    const baseY = mesh === sprite ? pos.y : mesh.position.y + (mesh.userData.lift || 0);
     _v.set(mesh.position.x, baseY + mesh.scale.y * 0.92, mesh.position.z).project(camera);
     el.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
     el.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
@@ -2374,7 +2514,7 @@ function updateBubbles() {
       continue;
     }
     // point above the head, projected onto the screen
-    const baseY = owner === sprite ? pos.y : owner.position.y;
+    const baseY = owner === sprite ? pos.y : owner.position.y + (owner.userData.lift || 0);
     _v.set(
       owner.position.x,
       baseY + owner.scale.y * 0.95,
@@ -2386,8 +2526,8 @@ function updateBubbles() {
   }
 }
 
-function receiveChat(id, name, text, admin) {
-  addToHistory(name, text, id, admin);
+function receiveChat(id, name, text, admin, color) {
+  addToHistory(name, text, id, admin, color);
   const owner = id === myId || id === "me" ? sprite : others.get(id)?.mesh;
   if (owner) showBubble(owner, text);
 }
@@ -2418,7 +2558,7 @@ document.querySelector("#chat form").addEventListener("submit", (e) => {
   }
   if (MULTIPLAYER && ws?.readyState === 1)
     ws.send(JSON.stringify({ t: "chat", text }));
-  else receiveChat("me", NAME, text); // offline: show only to me
+  else receiveChat("me", NAME, text, false, COLOR); // offline: show only to me
 });
 // Enter opens the chat; Esc leaves it
 addEventListener("keydown", (e) => {
@@ -2472,34 +2612,29 @@ addEventListener("keydown", (e) => {
 // near the capybara: a prompt over it ("E" or tap to feed); feeding opens its ironic thank-you bubble
 const capyPrompt = Object.assign(document.createElement("button"), { id: "capy-prompt", type: "button" });
 capyPrompt.innerHTML = MOBILE ? "tap to feed the capybara" : "<kbd>E</kbd> feed the capybara";
-capyPrompt.style.marginTop = "-26px"; // above the Zzz bubble
-const feedCapy = () => showBubble(capy.mesh, capy.feed(performance.now()));
+// feeding goes to the room, which tells everyone (you included); offline, it happens only here
+const CAPY_SIT_MS = 6000;
+const feedCapy = () => {
+  if (MULTIPLAYER && ws?.readyState === 1) return ws.send(JSON.stringify({ t: "capy" }));
+  const now = roomNow();
+  if (now < capyFed.until) return;
+  capyWasFed({ at: now, until: now + CAPY_SIT_MS, lost: capyFed.lost + capyFed.until - capyFed.at, phrase: Math.floor(Math.random() * 1000) });
+};
 capyPrompt.addEventListener("click", (e) => {
   feedCapy();
   e.currentTarget.blur(); // give the keyboard back to the game
 });
 document.body.append(capyPrompt);
-// fed only by day: at night it's asleep and nothing wakes it
 const nearCapy = () =>
-  isDay && mySeat < 0 && !nearBoard() && Math.hypot(pos.x - capy.mesh.position.x, pos.z - capy.mesh.position.z) < CAPY_NEAR;
+  mySeat < 0 && !nearBoard() && Math.hypot(pos.x - capy.mesh.position.x, pos.z - capy.mesh.position.z) < CAPY_NEAR;
 addEventListener("keydown", (e) => {
   if (typing() || e.repeat || gamePaused || wall.isOpen() || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key.toLowerCase() === "e" && nearCapy()) feedCapy();
 });
-// asleep at night: a little "Zzz..." bubble floats over it
-const capyZzz = Object.assign(document.createElement("div"), { id: "capy-zzz", textContent: "Zzz..." });
-document.body.append(capyZzz);
 function updateCapy() {
-  const now = performance.now();
-  capy.setAsleep(!isDay);
-  capy.update(now);
-  const sleeping = capy.isAsleep(now) && !gamePaused && !bubbles.has(capy.mesh);
-  capyZzz.classList.toggle("on", sleeping);
-  if (sleeping) {
-    _v.set(capy.mesh.position.x - 0.6, capy.mesh.position.y + 2.6, capy.mesh.position.z).project(camera);
-    capyZzz.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
-    capyZzz.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
-  }
+  const t = roomNow();
+  walkCapy(t);
+  capy.update(t);
   capy.mesh.rotation.set(camera.rotation.x * 0.5, 0, 0); // faces the camera like the trainers
   const show = nearCapy() && !wall.isOpen() && !gamePaused && !bubbles.has(capy.mesh);
   capyPrompt.classList.toggle("on", show);
@@ -2580,7 +2715,7 @@ function loop() {
   const currentStep = walking ? Math.floor(tAnim) % CHARACTER.steps : 0;
   const running = Boolean(walking && run);
   setFrame(dir, currentStep, running);
-  sendPosition(performance.now(), currentStep);
+  sendPosition(performance.now(), currentStep, running);
   const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
   updateHoldButton();
   updateOthers(dt);
@@ -2604,7 +2739,7 @@ function loop() {
   updateOcclusion();
   // facing the camera, tilted only halfway (the shadow looks like a standing body)
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
-  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, mySeat >= 0 ? seatSpot(mySeat) : null);
+  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, heldDir(myHold, mySeat >= 0 ? seatSpot(mySeat) : null, !walking, dir));
 
   renderer.render(scene, camera);
   updateNameTags();

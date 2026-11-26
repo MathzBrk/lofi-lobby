@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- **The capybara takes a walk**: it strolls left and right on the sand path in front of the house on the right, by day and by night. Feed it (E) and it sits down to chew and thank you, then walks on. Everyone sees the same capybara: same place, same step, same thank-you (the room keeps its clock and tells everyone when it is fed).
+- **Coffee on your feet**: **Q** (or the cup button, now always in the top card) puts a coffee in your hand while you stand still, and everyone sees it; it goes away while you walk and comes back when you stop. The laptop and the book still need a bench.
+- **Likes on the wall**: every note has a heart; tap it to like (or take the like back) and everyone sees the count change live. The wall opens with the most liked notes on top, and a **top / new** switch in its header goes back to newest first (remembered). One like per browser, at most 3 per network on a note.
+- **Name colour**: pick one of ten colours for your name on the enter/pause screen, or in-game from the dot next to "you: <name>" in the top card; a first visit gets a random one. Everyone sees it over your trainer and in the chat, and it is remembered. The admin keeps the gold badge.
 - **Fireflies**: at night, little lights blink and drift around the pond. They fade out by day and in the rain. Only for you.
 - **Open tabs follow the deploy**: after a new deploy, a tab that reconnects to the room reloads itself to get the new version (it waits while you are writing a note or a chat message).
 - **Benches**: park benches around the town (wooden slats on iron ends, like the lamp posts), two seats each, some facing the camera and some sideways along the paths. Walk up and a "press E to sit" note shows over the seat; press **E** (or tap the note) to sit, and any move key stands you up. Everyone sees you sitting, a seat holds one player, and a bench hides whoever stands behind it. Two of them face the pond, between the lamp posts at its ends, with a few candles on the grass. While sitting, **Q** (or the cup button) puts a laptop on your lap, a coffee in your hand or an open book (its pages turn now and then), and everyone sees it. You get up toward the side you walked off, and the camera glides instead of jumping.
@@ -28,6 +32,7 @@
 - Progressive mute for chat spam (rate exceeded, or the same text 4+ times in a row): warning, then 15 s, 1 min, 5 min, 30 min.
 
 ### Changed
+- A bad word in the chat or on the wall now reads `LOBBA` instead of `***`.
 - Lighter shadows: the lamp posts' shadow maps are 512 instead of 1024 and the moon's (sun's by day) 1024 instead of 2048, the same on every device. The town looks the same by night and by day, and the game takes about 245 MB less of GPU memory (about 355 MB down to 110 MB).
 - Two trainers standing close: the one in front now covers the other from head to toe (the feet of the one behind used to show through). Every trainer is drawn at the depth of its feet, not only yours.
 - Admin login: type `/admin` in the chat and then the password in its own login box instead of `?admin=` in the URL; `/logout` leaves. Admin lock is looser: 20 tries, then 1 minute.
@@ -37,6 +42,10 @@
 - A single room, `lobby`: `?room=` is gone and the server refuses other room names, so nobody can open extra rooms to run up the bill.
 
 ### Fixed
+- The chat button is back on phones (a desktop-only rule was hiding it there too).
+- Name tags, chat bubbles and the sit and wall prompts no longer show over the chat and the other panels.
+- The chat bubble over a trainer keeps one size on every screen (it used to get narrower on small screens and near the right edge).
+- Running now shows for everyone: other players used to see a runner with the walking frames.
 - Chat history scrolls to older messages; new messages only pull you down if you were already at the bottom.
 - Long words without spaces now wrap in the chat bubble and history.
 
