@@ -1564,8 +1564,13 @@ function bodyShape(tex, cfg, d) {
     }
   // hands are skin too: keep only the face, the skin above the body's first row that has none in the middle
   const lastFaceRow = Math.max(...face.filter(([i]) => Math.abs(i - (min + max) / 2) < 3).map(([, j]) => j), 0);
-  const shift = max < 0 ? 0 : d === "right" ? max - 22 : d === "left" ? 31 - min - 22 : Math.round((min + max) / 2) - 16;
-  return (bySheet[d] = { face: face.filter(([, j]) => j <= Math.max(lastFaceRow, 21)), shift, key: "s" + bySheet.id,
+  // from the front the middle is the face's (a bag or an arm on one side would pull the body's off)
+  const fx = face.map(([i]) => i);
+  const middle = d === "down" && fx.length ? (Math.min(...fx) + Math.max(...fx)) / 2 : (min + max) / 2;
+  const shift = max < 0 ? 0 : d === "right" ? max - 22 : d === "left" ? 31 - min - 22 : Math.round(middle) - 16;
+  // seen from the front, the art sits right under the chin (row 21 on the sheet it was drawn for)
+  const drop = d === "down" && lastFaceRow ? lastFaceRow - 21 : 0;
+  return (bySheet[d] = { face: face.filter(([, j]) => j <= Math.max(lastFaceRow, 21)), shift, drop, key: "s" + bySheet.id,
     skin: tone[3] ? `rgb(${tone.slice(0, 3).map((v) => Math.round(v / tone[3])).join(",")})` : "#f0b890" });
 }
 const heldTex = {};
@@ -1590,7 +1595,7 @@ function heldTextures(item, d, shape) {
       c.globalAlpha = glowOnly && !glows ? 0.3 : 1; // the rest glows a little too, to stay readable at night
       const rise = puff === undefined ? 0 : (frame + puff) % 4; // 0..3 pixels up, then it starts again
       c.fillStyle = color === "skin" ? shape?.skin || "#f0b890" : color;
-      c.fillRect(x + (shape?.shift || 0) + (rise % 2), y - rise, w, h);
+      c.fillRect(x + (shape?.shift || 0) + (rise % 2), y + (shape?.drop || 0) - rise, w, h);
     }
     const t = new THREE.CanvasTexture(cv);
     t.magFilter = t.minFilter = THREE.NearestFilter;
@@ -1647,7 +1652,6 @@ holdBtn.addEventListener("click", (e) => {
 let sitN = 0;
 const sendSeat = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "sit", seat: mySeat, n: ++sitN }));
 const seatTaken = (id) => [...others.values()].some((o) => o.seat === id);
-const sitBtn = document.querySelector("#sit");
 function nearestFreeSeat() {
   let best = -1,
     bestD = SIT_RANGE;
@@ -1708,10 +1712,6 @@ const toggleSit = () => {
   const id = nearestFreeSeat();
   if (id >= 0) sit(id);
 };
-sitBtn.addEventListener("click", (e) => {
-  toggleSit();
-  e.currentTarget.blur(); // give the keyboard back to the game
-});
 addEventListener("keydown", (e) => {
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
   const k = e.key.toLowerCase();
@@ -2168,6 +2168,10 @@ function updateNameTags() {
 const _v = new THREE.Vector3();
 // "press E to sit" over the nearest free seat, while you're close enough to take it
 const sitPrompt = document.querySelector("#sit-prompt");
+sitPrompt.addEventListener("click", (e) => {
+  toggleSit();
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
 function updateSitPrompt(seat) {
   const s = seat >= 0 && !gamePaused && !typing() ? seatSpot(seat) : null;
   sitPrompt.hidden = !s;
@@ -2272,8 +2276,6 @@ elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePla
 
 // ---- Message wall ----
 const wall = setupWall({ getName: () => NAME, getGender: () => GENDER, isAdmin: () => IS_ADMIN });
-const wallBtn = document.querySelector("#wall-btn");
-wallBtn.addEventListener("click", (e) => { e.currentTarget.blur(); wall.show(); });
 // near the board: a prompt over it ("E" or tap to read)
 const wallPrompt = Object.assign(document.createElement("button"), { id: "wall-prompt", type: "button" });
 wallPrompt.innerHTML = MOBILE ? "tap to read the wall" : "<kbd>E</kbd> read the wall";
@@ -2358,8 +2360,6 @@ function loop() {
   setFrame(dir, currentStep, running);
   sendPosition(performance.now(), currentStep);
   const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
-  sitBtn.hidden = mySeat < 0 && freeSeat < 0;
-  sitBtn.setAttribute("aria-label", mySeat >= 0 ? "stand up" : "sit");
   holdBtn.hidden = mySeat < 0;
   holdBtn.classList.toggle("on", myHold > 0);
   holdBtn.setAttribute("aria-label", "hold " + HELD[(myHold + 1) % 3]);

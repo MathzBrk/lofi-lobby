@@ -39,7 +39,7 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | N or the day/night button | switch between day and night for you |
 | R or the rain button | turn the rain on or off for you (greyer sky by day) |
 | F or the full screen button | enter or leave full screen (hidden where the browser can't, e.g. iPhone) |
-| B or the board button, E by the board | open the message wall: read the notes and pin your own |
+| B, or E (or a tap on the note) by the board | open the message wall: read the notes and pin your own |
 | Space | pause the music for you only |
 
 - There is one room, `lobby`, for everyone (the server refuses any other name).
