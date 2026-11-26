@@ -36,6 +36,7 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | Phone: drag anywhere | walk (push to the edge of the ring to run); **chat** button opens the chat |
 | Enter | open the chat; it stays open after sending · Esc or Enter on an empty box goes back to walking |
 | G | switch trainer |
+| T by the pond | skip a stone on the water (everyone sees it) |
 | N or the day/night button | switch between day and night for you |
 | R or the rain button | turn the rain on or off for you (greyer sky by day) |
 | F or the full screen button | enter or leave full screen (hidden where the browser can't, e.g. iPhone) |

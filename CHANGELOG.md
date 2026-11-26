@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Skipping stones**: by the pond, press **T** (or tap the note over you) to throw a stone into the water. It flies from your hand in an arc, skips one to four times (a ring and a few drops at each touch, each hop shorter and lower) and sinks with a bigger splash. Everyone sees the same throw: the thrower plans where it touches the water and the room passes it on. No new assets: the pebble, the rings and the drops are made in code.
 - A small GitHub link beside the chat: the game is open source, come and contribute.
 - **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
 - **Trainer and cap in the top card**: a male/female switch and, beside it, the cap you wear (drawn as a little cap, so it is not taken for the name colour's dot). Click the cap to see the other colours; picking one folds them away.
