@@ -29,10 +29,12 @@ function paintCork(notes) {
   const c = cork.getContext("2d");
   c.fillStyle = "#b8a274";
   c.fillRect(0, 0, 96, 64);
+  // cork grain: specks from a small seeded generator (always the same board, evenly spread)
+  let seed = 7;
+  const rand = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
   for (let i = 0; i < 260; i++) {
-    const h = hash("cork" + i);
-    c.fillStyle = h % 3 ? "#a58f62" : "#c8b384";
-    c.fillRect(h % 96, (h >> 8) % 64, 1, 1);
+    c.fillStyle = rand() < 0.66 ? "#a58f62" : "#c8b384";
+    c.fillRect(Math.floor(rand() * 96), Math.floor(rand() * 64), 1, 1);
   }
   // the latest notes, as little papers with a pin
   const spots = [[6, 6], [30, 4], [55, 7], [76, 5], [10, 34], [36, 33], [60, 35], [80, 36]];
@@ -64,8 +66,9 @@ export function createBoard(scene) {
     g.add(mesh);
     return mesh;
   };
-  box(0.5, 6.2, 0.5, darkWood, -3.4, 3.1, 0);
-  box(0.5, 6.2, 0.5, darkWood, 3.4, 3.1, 0);
+  // posts stop under the roof
+  box(0.5, 5.6, 0.5, darkWood, -3.4, 2.8, 0);
+  box(0.5, 5.6, 0.5, darkWood, 3.4, 2.8, 0);
   box(7.2, 4.4, 0.35, wood, 0, 3.6, 0); // frame
   const panel = new THREE.Mesh(
     new THREE.PlaneGeometry(6.4, 3.7),
