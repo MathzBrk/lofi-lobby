@@ -1,7 +1,7 @@
 // Room server: one Durable Object per room, everyone connected over WebSocket.
 // Protocol (JSON):
-//   client -> server: { t: "hello", name, gender, color, x, z, dir } | { t: "pos", x, z, dir, step, run }
-//                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
+//   client -> server: { t: "hello", name, gender, color, cap, x, z, dir } | { t: "pos", x, z, dir, step, run }
+//                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender, cap }
 //                     { t: "color", color }   (name colour: one of NAME_COLORS)
 //                     { t: "sit", seat, n }   (bench seat 0..15 or -1 to stand; n numbers the request)
 //                     { t: "capy" }   (feed the capybara)
@@ -14,7 +14,7 @@
 //                                                     token: only this connection knows it, for /api/leave) | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, color, text, at } | { t: "name", id, name } | { t: "color", id, color }
-//                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "gender", id, gender, cap } | { t: "radio", command } | { t: "error", msg }
 //                     { t: "hold", item }   (what you hold: 0 nothing, 1 laptop, 2 coffee, 3 book; the client decides when it shows)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "capy", at, until, lost, phrase }   (the capybara was fed: it sits from at to until, room clock;
@@ -152,6 +152,8 @@ const gender = (g) => (g === "female" ? "female" : "male");
 // Each browser paints it with its own hex for that name (NAME_COLORS in src/main.js).
 const NAME_COLORS = ["coral", "peach", "lime", "mint", "aqua", "sky", "lilac", "orchid", "pink", "rose"];
 const nameColor = (c) => (NAME_COLORS.includes(c) ? c : "");
+// which of the 5 cap colours a trainer wears (0 red, 1 blue, 2 green, 3 pink, 4 white)
+const cap = (c) => (Number.isInteger(c) && c >= 0 && c < 5 ? c : 0);
 
 // constant-time compare (timing doesn't leak how many characters match)
 function equal(a, b) {
@@ -514,7 +516,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap | 0, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
   }
   players() {
     return this.openSockets()
@@ -573,6 +575,7 @@ export class Room {
       p.name = this.nameFor(ws, m.name);
       p.gender = gender(m.gender);
       p.color = nameColor(m.color);
+      p.cap = cap(m.cap);
       // where the player already is (a reconnect, or a saved spot), so others see them there at once
       p.x = number(m.x);
       p.z = number(m.z);
@@ -584,8 +587,9 @@ export class Room {
       await this.rememberName(p);
     } else if (m.t === "gender") {
       p.gender = gender(m.gender);
+      p.cap = cap(m.cap);
       ws.serializeAttachment(p);
-      this.broadcast({ t: "gender", id: p.id, gender: p.gender }, ws);
+      this.broadcast({ t: "gender", id: p.id, gender: p.gender, cap: p.cap }, ws);
     } else if (m.t === "color") {
       p.color = nameColor(m.color);
       ws.serializeAttachment(p);

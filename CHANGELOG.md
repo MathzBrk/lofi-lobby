@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
+- **Trainer and cap in the top card**: a male/female switch and, beside it, the cap you wear (drawn as a little cap, so it is not taken for the name colour's dot). Click the cap to see the other colours; picking one folds them away.
 - **The capybara takes a walk**: it strolls left and right on the sand path in front of the house on the right, by day and by night. Feed it (E) and it sits down to chew and thank you, then walks on. Everyone sees the same capybara: same place, same step, same thank-you (the room keeps its clock and tells everyone when it is fed).
 - **Coffee on your feet**: **Q** (or the cup button, now always in the top card) puts a coffee in your hand while you stand still, and everyone sees it; it goes away while you walk and comes back when you stop. The laptop and the book still need a bench.
 - **Likes on the wall**: every note has a heart; tap it to like (or take the like back) and everyone sees the count change live. The wall opens with the most liked notes on top, and a **top / new** switch in its header goes back to newest first (remembered). One like per browser, at most 3 per network on a note.
