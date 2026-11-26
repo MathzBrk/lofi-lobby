@@ -1,7 +1,7 @@
 // Room server: one Durable Object per room, everyone connected over WebSocket.
 // Protocol (JSON):
 //   client -> server: { t: "hello", name, gender, x, z, dir } | { t: "pos", x, z, dir, step }
-//                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender }
+//                     { t: "chat", text } | { t: "name", name } | { t: "gender", gender, cap }
 //                     { t: "sit", seat, n }   (bench seat 0..15 or -1 to stand; n numbers the request)
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
@@ -10,7 +10,7 @@
 //   server -> client: { t: "you", id, v } | { t: "state", players: [...] }
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, text, at } | { t: "name", id, name }
-//                     { t: "gender", id, gender } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "gender", id, gender, cap } | { t: "radio", command } | { t: "error", msg }
 //                     { t: "hold", item }   (what you hold while sitting: 0 nothing, 1 laptop, 2 coffee, 3 book)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "history", messages: [{ id, name, text, at }] } (on join)
@@ -119,6 +119,8 @@ const number = (v) => {
   return Number.isFinite(n) ? Math.max(-COORD_LIMIT, Math.min(COORD_LIMIT, n)) : 0;
 };
 const gender = (g) => (g === "female" ? "female" : "male");
+// which of the 5 cap colours a trainer wears (0 red, 1 blue, 2 green, 3 pink, 4 white)
+const cap = (c) => (Number.isInteger(c) && c >= 0 && c < 5 ? c : 0);
 
 // constant-time compare (timing doesn't leak how many characters match)
 function equal(a, b) {
@@ -399,7 +401,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, cap: p.cap | 0, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
   }
   players() {
     return this.state.getWebSockets().map((ws) => ws.deserializeAttachment()).filter(Boolean).map((p) => this.public(p));
@@ -451,6 +453,7 @@ export class Room {
       if (m.v !== 1) return void ws.send(JSON.stringify({ t: "admin-ok" }));
       p.name = this.nameFor(ws, m.name);
       p.gender = gender(m.gender);
+      p.cap = cap(m.cap);
       // where the player already is (a reconnect, or a saved spot), so others see them there at once
       p.x = number(m.x);
       p.z = number(m.z);
@@ -463,8 +466,9 @@ export class Room {
       await this.rememberName(p);
     } else if (m.t === "gender") {
       p.gender = gender(m.gender);
+      p.cap = cap(m.cap);
       ws.serializeAttachment(p);
-      this.broadcast({ t: "gender", id: p.id, gender: p.gender }, ws);
+      this.broadcast({ t: "gender", id: p.id, gender: p.gender, cap: p.cap }, ws);
     } else if (m.t === "name") {
       p.name = this.nameFor(ws, m.name);
       ws.serializeAttachment(p);

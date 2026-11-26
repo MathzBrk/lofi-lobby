@@ -137,6 +137,16 @@
   #enter .genders { display: flex; gap: 10px; }
   #enter .genders button { font-size: 14px; padding: 10px 18px; }
   #enter .genders button.on { border-color: #ffc95a; color: #ffc95a; }
+  /* colour swatches (the same look as the name colours on the live site) */
+  .colors { display: flex; gap: 8px; }
+  .colors button, #enter .colors button { width: 22px; height: 22px; padding: 0; border-radius: 50%; background: var(--c);
+    background-clip: padding-box; border: 2px solid transparent; }
+  .colors button:hover, #enter .colors button:hover { border-color: rgba(255,255,255,.5); }
+  .colors button.on, #enter .colors button.on { border-color: #F2F2F5; }
+  #enter .look { display: flex; align-items: center; gap: 16px; }
+  #trainer-preview { width: 80px; height: 80px; image-rendering: pixelated; background: rgba(255,255,255,.05);
+                     border: 1px solid rgba(255,255,255,.14); border-radius: 8px; }
+  #enter .look-pick { display: flex; flex-direction: column; gap: 10px; }
   #enter button { font: inherit; font-size: 18px; color: #F2F2F5; background: rgba(10,10,14,.75); border: 1px solid rgba(255,255,255,.2);
                    border-radius: 8px; padding: 16px 28px; cursor: pointer; }
   #enter button:hover { border-color: #ffc95a; color: #ffc95a; }
@@ -225,6 +235,12 @@
       <button type="button" data-gender="male">male</button>
       <button type="button" data-gender="female">female</button>
     </div>
+    <!-- your trainer as it will look, and the cap colour (same for every trainer) -->
+    <div class="look">
+      <canvas id="trainer-preview" width="32" height="32" aria-hidden="true"></canvas>
+      <div class="look-pick"><small>cap colour</small>
+        <div class="colors" id="cap-colors" role="radiogroup" aria-label="cap colour"></div></div>
+    </div>
     <button id="btn-enter">enter the room ▶</button>
   </div>
 </div>
@@ -291,9 +307,39 @@
   try { saved = localStorage.getItem("gender") === "female" ? "female" : "male"; } catch {}
   const mark = (g) => genderButtons.forEach((b) => b.classList.toggle("on", b.dataset.gender === g));
   mark(saved);
+  // cap colour: the same 5 swatches for every trainer (the colours come from the game, window.CAPS)
+  const capsBox = document.querySelector("#cap-colors");
+  const drawCaps = () => {
+    const caps = window.CAPS || [];
+    const cap = window.myCap?.();
+    capsBox.replaceChildren(...caps.map((c, i) => {
+      const b = Object.assign(document.createElement("button"), { type: "button", title: `${c.name} cap` });
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-label", `${c.name} cap`);
+      b.setAttribute("aria-checked", i === cap);
+      b.style.setProperty("--c", c.swatch);
+      b.classList.toggle("on", i === cap);
+      b.addEventListener("click", () => { window.applyCap?.(i); drawCaps(); });
+      return b;
+    }));
+  };
+  // the preview: the trainer's front frame, redrawn whenever the game finishes a new look
+  const preview = document.querySelector("#trainer-preview").getContext("2d");
+  const drawPreview = () => {
+    const f = window.trainerFrame?.();
+    if (!f) return;
+    preview.canvas.width = f.w;
+    preview.canvas.height = f.h;
+    preview.drawImage(f.img, f.x, f.y, f.w, f.h, 0, 0, f.w, f.h);
+  };
+  addEventListener("trainer:look", drawPreview);
+  // the game module loads after this script: draw once it has set window.CAPS
+  if (window.CAPS) drawCaps(), drawPreview();
+  else addEventListener("load", () => (drawCaps(), drawPreview()), { once: true });
   genderButtons.forEach((b) => b.addEventListener("click", () => {
     mark(b.dataset.gender);
     window.applyGender?.(b.dataset.gender);
+    drawCaps();
   }));
   const pauseScreen = document.querySelector("#enter");
   const btnEnter = document.querySelector("#btn-enter");

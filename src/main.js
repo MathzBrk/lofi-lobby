@@ -21,6 +21,51 @@ let GENDER = "male";
 try {
   GENDER = localStorage.getItem("gender") === "female" ? "female" : "male";
 } catch {}
+// Cap colours: the same 5 for every trainer. Each is a light, shade and dark tone that replaces
+// the cap's own three (the male's red cap, the female's white beanie) on the head of every frame used.
+const CAPS = [
+  { name: "red", swatch: "#f06848", tones: [[240, 104, 72], [192, 56, 56], [120, 64, 64]] },
+  { name: "blue", swatch: "#6098f0", tones: [[96, 152, 240], [56, 96, 192], [40, 56, 120]] },
+  { name: "green", swatch: "#70c868", tones: [[112, 200, 104], [56, 144, 72], [40, 88, 56]] },
+  { name: "pink", swatch: "#f8b8d8", tones: [[248, 184, 216], [224, 136, 184], [176, 96, 152]] },
+  { name: "white", swatch: "#e8e8f8", tones: [[232, 232, 248], [200, 200, 216], [168, 160, 200]] },
+];
+// each sheet's own cap: which colour it already is, and its tones as "r,g,b" keys
+const SHEET_CAP = { male: 0, female: 4 };
+const capOf = (c) => (Number.isInteger(c) && c >= 0 && c < CAPS.length ? c : null);
+// nothing chosen yet: each trainer keeps the cap its sheet was drawn with
+let CAP = null;
+try {
+  CAP = capOf(Number(localStorage.getItem("cap") ?? NaN));
+} catch {}
+const myCap = () => CAP ?? SHEET_CAP[GENDER];
+window.CAPS = CAPS; // the start screen draws its swatches from these
+window.myCap = () => myCap();
+// my trainer's front frame, for the start screen's preview
+window.trainerFrame = () => {
+  const img = sheetTex?.image;
+  if (!img?.width || !(img instanceof HTMLCanvasElement)) return null;
+  return { img, ...framePos(CHARACTER.cfg, "down", 0) };
+};
+// the cap lives in the top rows of a frame (the face, hair and the female's white scarf are lower down)
+const HEAD_ROWS = { male: 18, female: 16 };
+function recolorCap(d, width, gender, cap) {
+  const from = CAPS[SHEET_CAP[gender]].tones,
+    to = CAPS[cap]?.tones;
+  if (!to || cap === SHEET_CAP[gender]) return;
+  const map = Object.fromEntries(from.map((t, i) => [t.join(","), to[i]]));
+  for (const cfg of [CROP[gender], RUN_CROP[gender]])
+    for (const dir of Object.keys(cfg.rows))
+      for (let step = 0; step < cfg.steps; step++) {
+        const { x, y, w } = framePos(cfg, dir, step);
+        for (let yy = y; yy < y + HEAD_ROWS[gender]; yy++)
+          for (let xx = x; xx < x + w; xx++) {
+            const i = (yy * width + xx) * 4;
+            const to = map[`${d[i]},${d[i + 1]},${d[i + 2]}`];
+            if (to) [d[i], d[i + 1], d[i + 2]] = to;
+          }
+      }
+}
 // configured sheets that failed to load (missing file): use the original
 const failedSheets = new Set();
 const sheetAvailable = (g) => !!SHEETS[g] && !failedSheets.has(g);
@@ -1224,6 +1269,7 @@ function createCharacterTexture(gender) {
         t.colorSpace = THREE.SRGBColorSpace;
         removeBackground(t);
         setFrame("down", 0);
+        dispatchEvent(new Event("trainer:look")); // the start screen's preview
       },
       undefined,
       () => {
@@ -1234,10 +1280,13 @@ function createCharacterTexture(gender) {
     );
     return t;
   }
-  const t = new THREE.CanvasTexture(generateOriginalTrainer(gender));
+  const t = new THREE.CanvasTexture(generateOriginalTrainer(gender, myCap()));
   t.magFilter = t.minFilter = THREE.NearestFilter;
   t.colorSpace = THREE.SRGBColorSpace;
-  queueMicrotask(() => setFrame("down", 0));
+  queueMicrotask(() => {
+    setFrame("down", 0);
+    dispatchEvent(new Event("trainer:look"));
+  });
   return t;
 }
 let sheetTex = createCharacterTexture(GENDER);
@@ -1260,9 +1309,17 @@ function applyGender(gender) {
   ].forEach((m) => (m.needsUpdate = true));
   old.dispose();
   if (typeof ws !== "undefined" && ws?.readyState === 1)
-    ws.send(JSON.stringify({ t: "gender", gender: GENDER }));
+    ws.send(JSON.stringify({ t: "gender", gender: GENDER, cap: myCap() }));
 }
 window.applyGender = applyGender; // used by the start screen
+// Switch my cap colour (0-2): redraws my sheet and tells the room
+window.applyCap = (cap) => {
+  CAP = capOf(cap) ?? 0;
+  try {
+    localStorage.setItem("cap", CAP);
+  } catch {}
+  applyGender(GENDER);
+};
 
 // Switch mid-game: HUD button or the G key (outside the chat)
 const toggleGender = () =>
@@ -1282,7 +1339,7 @@ addEventListener("keydown", (e) => {
 // (4 directions x 4 steps, 32px frames, 2px gap).
 // male: green cap, orange jacket, purple backpack.
 // female: coral beanie, long hair, teal coat, skirt, yellow bag.
-function generateOriginalTrainer(gender = "male") {
+function generateOriginalTrainer(gender = "male", cap = null) {
   const fem = gender === "female";
   const {
     frame: Q,
@@ -1326,6 +1383,11 @@ function generateOriginalTrainer(gender = "male") {
         eye: "#1b1b24",
         outline: "#1b1b24",
       };
+  if (CAPS[cap]) {
+    // the generated trainer's cap in the chosen colour (a darker brim under it)
+    COLOR.cap = CAPS[cap].swatch;
+    COLOR.brim = "#" + new THREE.Color(COLOR.cap).multiplyScalar(0.7).getHexString();
+  }
   const dirs = ["down", "up", "left", "right"];
   dirs.forEach((dir, row) => {
     for (let step = 0; step < 4; step++) {
@@ -1424,7 +1486,7 @@ shadow.rotation.x = -Math.PI / 2;
 scene.add(shadow);
 
 // Replace the sheet's background color (pixel 0,0 of the first frame) with transparent
-function removeBackground(t, cfg = CHARACTER.cfg) {
+function removeBackground(t, cfg = CHARACTER.cfg, gender = GENDER, cap = myCap()) {
   const img = t.image;
   const cv = Object.assign(document.createElement("canvas"), {
     width: img.width,
@@ -1444,6 +1506,7 @@ function removeBackground(t, cfg = CHARACTER.cfg) {
     )
       d.data[i + 3] = 0;
   }
+  recolorCap(d.data, cv.width, gender, cap);
   ctx.putImageData(d, 0, 0);
   t.image = cv;
   t.needsUpdate = true;
@@ -1952,23 +2015,24 @@ function setFrameTex(tex, cfg, d, step) {
 
 function createOther(p) {
   const g = p.gender === "female" ? "female" : "male";
+  const cap = p.cap | 0;
   const available = sheetAvailable(g);
   const tex = available
     ? texLoader.load(
         SHEETS[g],
         () => {
-          removeBackground(tex, CROP[g]);
+          removeBackground(tex, CROP[g], g, cap);
           setFrameTex(tex, CROP[g], o.dir, o.step);
         },
         undefined,
         () => {
           failedSheets.add(g);
           o.cfg = GRID;
-          tex.image = generateOriginalTrainer(g);
+          tex.image = generateOriginalTrainer(g, cap);
           tex.needsUpdate = true;
         },
       )
-    : new THREE.CanvasTexture(generateOriginalTrainer(g));
+    : new THREE.CanvasTexture(generateOriginalTrainer(g, cap));
   tex.magFilter = tex.minFilter = THREE.NearestFilter;
   tex.colorSpace = THREE.SRGBColorSpace;
   const mesh = new THREE.Mesh(
@@ -2032,7 +2096,7 @@ function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   ws = new WebSocket(`${proto}://${location.host}/ws/${ROOM}`);
   ws.onopen = () => {
-    ws.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, x: pos.x, z: pos.z, dir }));
+    ws.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, cap: myCap(), x: pos.x, z: pos.z, dir }));
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
     if (myHold) sendHold();
     // a saved admin logs in again quietly, so everyone sees the admin badge
@@ -2106,6 +2170,7 @@ function connect() {
           seat: o.seat,
           name: o.name,
           gender: m.gender,
+          cap: m.cap,
           admin: o.admin,
         };
         removeOther(m.id);
