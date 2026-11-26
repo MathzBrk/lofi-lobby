@@ -362,6 +362,11 @@ export function setupWall({ getName, getGender, isAdmin }) {
   // the composer writes a new note, or edits one of yours
   function openCompose(n) {
     editing = n ? n.id : null;
+    // a fresh note starts on a random paper (never the one you used last), so the wall gets its colours by itself
+    if (!n && !draft.text) {
+      const others = Object.keys(COLORS).filter((c) => c !== draft.color);
+      draft.color = others[Math.floor(Math.random() * others.length)];
+    }
     area.value = n ? n.text : draft.text;
     setColor(n ? n.color : draft.color);
     form.querySelector(".pin-it").textContent = n ? "save" : "pin it";
