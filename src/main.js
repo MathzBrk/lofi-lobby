@@ -1867,9 +1867,9 @@ const HELD_ART = {
   // tip (brighter on one frame, a drag) and a thin trail of smoke rising and swaying past the shoulder
   "4down": [["skin", 21, 24, 2, 2], ["#f4f1ea", 23, 24, 3, 1], ["#d9a35b", 22, 24, 1, 1], ["#ff6a2a", 26, 24, 1, 1, 1],
     ["#ffd36b", 26, 24, 1, 1, 1, undefined, 1], ["#b8b8c6", 26, 22, 1, 1, 1, 0], ["#9c9cac", 26, 22, 1, 1, 1, 2]],
-  // from the side: the hand held out in front of the chest, below the chin, cigarette pointing forward
-  "4right": [["skin", 22, 25, 2, 1], ["#d9a35b", 24, 25, 1, 1], ["#f4f1ea", 25, 25, 2, 1], ["#ff6a2a", 27, 25, 1, 1, 1],
-    ["#ffd36b", 27, 25, 1, 1, 1, undefined, 1], ["#b8b8c6", 27, 23, 1, 1, 1, 0], ["#9c9cac", 27, 23, 1, 1, 1, 2]],
+  // from the side: the hand in front of the chest, below the chin, a short cigarette pointing forward
+  "4right": [["skin", 22, 25, 1, 1], ["#f4f1ea", 23, 25, 1, 1], ["#ff6a2a", 24, 25, 1, 1, 1],
+    ["#ffd36b", 24, 25, 1, 1, 1, undefined, 1], ["#b8b8c6", 24, 23, 1, 1, 1, 0], ["#9c9cac", 24, 23, 1, 1, 1, 2]],
   // from behind the body hides it: only the ember past the elbow and the smoke above it
   "4up": [["#ff6a2a", 24, 24, 1, 1, 1], ["#b8b8c6", 24, 22, 1, 1, 1, 0], ["#9c9cac", 24, 22, 1, 1, 1, 2]],
 };
