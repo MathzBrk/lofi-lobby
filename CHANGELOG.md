@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Fireworks after a deploy**: when a new version goes live, the town celebrates the pull requests it brought: rockets, bursts and "PR #65" written in sparks over the town, one short round per pull request ("+ 3 more" for the others), at the same second for everyone; whoever arrives mid-show sees the rest. By day the light dims for it. Only the numbers are shown, never who wrote them (look them up on GitHub). In development, the debug hub's **fireworks** plays a test show.
 - **Accounts**: press the GitHub button in the top card, or **log in** on the start screen, and connect GitHub (the only way to make one). Your account gets a number in the order accounts were made: the game's owner is #0, the next one #1, and so on. Nobody else sees your GitHub login, only the number. `/github` still works, and whoever had logged in for the contributor badge gets an account the next time they open the game.
 - **Profile**: click a name, over a trainer or in the chat (yours too), to open that player's profile: their trainer, a green dot when they are online, their account number, their merged pull requests and their medals.
 - **Medals**, in pixel art: hover one to read what it is for. The first one is **Founding member**: for every account made in the game's first week, until the end of November 2026.
