@@ -470,18 +470,18 @@ export function setupSocial(game) {
     drawAccount();
   }
   // Founding member: a card at the top of the screen for a guest who just walked in, with the medal,
-  // a log in button and a ✕ that is remembered.
+  // a log in button and a ✕. Closed, it stays away for this visit only: it is back the next time the
+  // game is opened, for as long as the medal can be had.
   let founderCard = null;
+  let founderClosed = false;
   function offerFounder() {
-    let seen = false;
-    try { seen = localStorage.getItem("founder-notice") === "seen"; } catch {}
-    if (account || seen || founderCard?.isConnected || Date.now() >= FOUNDER_UNTIL) return;
+    if (account || founderClosed || founderCard?.isConnected || Date.now() >= FOUNDER_UNTIL) return;
     founderCard = $("div", { className: "glass invite founder" }, $("img", { src: MEDALS.founder.img, alt: "", width: 32, height: 32 }),
       $("span", { innerHTML: "create your account until <b>nov 30</b><br>and get the <b>founding member</b> medal" }),
       icon("github", "log in", () => game.login(), "github"),
       icon("no", "close", () => {
         founderCard.remove();
-        try { localStorage.setItem("founder-notice", "seen"); } catch {}
+        founderClosed = true;
       }));
     invites.prepend(founderCard);
   }
