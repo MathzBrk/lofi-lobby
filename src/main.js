@@ -3534,15 +3534,27 @@ function mentionText(el, parts) {
 }
 
 const prsText = (n) => `${n} PR${n === 1 ? "" : "s"}`;
+// Red 1–10, blue 11–20, black 21–50, then the purple Master Ball at 51+.
+// Highest threshold first; its index runs backwards through the four balls in the sprite sheet.
+const PR_TIERS = [{ from: 51 }, { from: 21 }, { from: 11 }, { from: 1 }];
+/** Fills el with the ball for prs merged pull requests and the count (nothing for 0). */
+function showPrs(el, prs) {
+  if (el.dataset.prs === String(prs)) return;
+  el.dataset.prs = prs;
+  el.replaceChildren();
+  el.title = prs > 0 ? `${prsText(prs)} merged` : "";
+  if (!(prs > 0)) return;
+  const tier = PR_TIERS.findIndex((t) => prs >= t.from);
+  const ball = Object.assign(document.createElement("i"), { ariaHidden: "true" });
+  ball.style.backgroundPosition = `${(PR_TIERS.length - 1 - tier) * (100 / (PR_TIERS.length - 1))}% 0`;
+  el.append(ball, prsText(prs));
+}
 function addToHistory(name, text, id, admin, color, prs = 0) {
   const d = document.createElement("div");
   d.className = admin ? "m admin" : "m";
   const s = document.createElement("small");
   s.textContent = name;
-  if (prs > 0) {
-    d.classList.add("contrib");
-    s.dataset.prs = prsText(prs);
-  }
+  if (prs > 0) showPrs(s.appendChild(Object.assign(document.createElement("span"), { className: "prs" })), prs);
   paintName(s, color);
   if (IS_ADMIN && id && id !== myId && id !== "me") {
     s.className = "mod";
@@ -3645,10 +3657,8 @@ function nameTag(mesh, name, id, admin, color, prs = 0) {
   if (el.lastChild.textContent !== name) el.lastChild.textContent = name;
   if (el.dataset.color !== (color || "")) paintName(el, (el.dataset.color = color || ""));
   el.classList.toggle("admin", !!admin);
-  // contributor: a badge with the merged pull requests
-  const c = el.children[1];
-  const label = prs > 0 ? `contributor · ${prsText(prs)}` : "";
-  if (c.textContent !== label) c.textContent = label;
+  // contributor: a ball and the merged pull requests
+  showPrs(el.children[1], prs | 0);
 }
 function updateNameTags() {
   nameTag(sprite, NAME, null, meAdmin, COLOR, myPrs);
@@ -3803,7 +3813,12 @@ function closeGithubLogin() {
 }
 githubLogin.querySelector("[data-cancel]").addEventListener("click", closeGithubLogin);
 githubLogin.querySelector("[data-copy]").addEventListener("click", (e) => {
-  navigator.clipboard?.writeText(githubLogin.querySelector("code").textContent).then(() => (e.currentTarget.textContent = "copied"), () => {});
+  const button = e.currentTarget;
+  navigator.clipboard?.writeText(githubLogin.querySelector("code").textContent).then(() => {
+    button.textContent = "copied!";
+    button.classList.add("done");
+    setTimeout(() => (button.classList.remove("done"), (button.textContent = "copy")), 1500);
+  }, () => {});
 });
 elInput.addEventListener("focus", () => {
   Object.keys(keys).forEach((k) => (keys[k] = false));

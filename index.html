@@ -96,9 +96,14 @@
   .tag .badge { display: none; width: fit-content; margin: 0 auto 2px; padding: 1px 5px; border-radius: 3px;
                 font-size: 8px; line-height: 11px; font-weight: 400; color: #1b1406; background: #ffc95a; text-shadow: none; }
   .tag.admin .badge { display: block; }
-  /* contributor: the same kind of badge, in GitHub's "merged" purple, with the merged pull requests */
-  .tag .contrib { display: block; width: fit-content; margin: 0 auto 2px; padding: 1px 5px; border-radius: 3px;
-                  font-size: 8px; line-height: 11px; font-weight: 400; color: #160b2e; background: #b794ff; text-shadow: none; }
+  /* contributor: a pixel-art ball (red, blue, black, purple) and the count, quieter than the admin's badge */
+  .tag .contrib { display: block; width: fit-content; margin: 0 auto 2px; padding: 0 4px; border-radius: 3px;
+                  font-size: 8px; line-height: 11px; font-weight: 400; color: #D8D8E0; background: rgba(10,11,16,.72);
+                  border: 1px solid rgba(255,255,255,.16); text-shadow: none; }
+  .tag .contrib i, #msgs .m .prs i { display: inline-block; width: 10px; height: 10px; margin-right: 3px; vertical-align: -1px;
+                  background: url("/assets/badges/contributor-balls.svg") 0 0 / 400% 100%; image-rendering: pixelated; }
+  #msgs .m .prs { margin-left: 6px; color: #A9A9B4; white-space: nowrap; }
+  #msgs .m .prs i { width: 12px; height: 12px; vertical-align: -2px; }
   .tag .contrib:empty { display: none; }
   .tag.admin .who { color: #ffc95a; }
   .tag .who { display: block; text-align: center; color: var(--name, inherit); } /* --name: the colour the player picked */
@@ -122,10 +127,7 @@
   #at-list button.on, #at-list button:hover { background: rgba(255,201,90,.16); }
   #msgs .m.admin small { color: #1b1406; background: #ffc95a; width: fit-content; padding: 0 5px; border-radius: 3px; }
   #msgs .m.admin small::after { content: " · admin"; }
-  #msgs .m.contrib small { color: #160b2e; background: #b794ff; width: fit-content; padding: 0 5px; border-radius: 3px; }
-  #msgs .m.contrib small::after { content: " · contributor · " attr(data-prs); }
-  #msgs .m.admin.contrib small { color: #1b1406; background: #ffc95a; }
-  #msgs .m.admin.contrib small::after { content: " · admin · contributor · " attr(data-prs); }
+  #msgs .m.admin .prs { color: inherit; }
   #my-name { font: inherit; color: var(--name, #ffc95a); background: none; border: 0; padding: 0; cursor: pointer; }
   #my-name:hover { text-decoration: underline; }
   #name-input { font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(0,0,0,.4); width: 120px;
@@ -151,6 +153,10 @@
   #github-login button, #github-login a { font: inherit; font-size: 11px; color: #F2F2F5; background: rgba(0,0,0,.4); cursor: pointer;
                         text-decoration: none; border: 1px solid rgba(255,255,255,.16); border-radius: 6px; padding: 5px 12px; }
   #github-login a { border-color: #b794ff; color: #b794ff; }
+  #github-login button:hover, #github-login a:hover { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.4); }
+  #github-login a:hover { background: rgba(183,148,255,.16); border-color: #b794ff; }
+  #github-login button:active, #github-login a:active { transform: translateY(1px); background: rgba(255,255,255,.2); }
+  #github-login button.done { border-color: #7ee08a; color: #7ee08a; }
   #admin { display: flex; gap: 6px; margin-top: 8px; }
   #admin[hidden] { display: none; }
   #admin button { font: inherit; font-size: 14px; color: #F2F2F5; background: rgba(0,0,0,.4);

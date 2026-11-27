@@ -38,7 +38,7 @@ binding = "VERSION"
 # with "Enable Device Flow" on (it is public, no secret is needed); empty turns the login off.
 [vars]
 GITHUB_REPO = "YudiG12/lofi-lobby"
-GITHUB_CLIENT_ID = ""
+GITHUB_CLIENT_ID = "Ov23liuvJkSpoqUXts9B"
 
 # ALLOWED_ORIGINS (optional): extra origins allowed on the WebSocket, comma-separated.
 # ADMIN_PASSWORD: secret -> `npx wrangler secret put ADMIN_PASSWORD` (never here)
