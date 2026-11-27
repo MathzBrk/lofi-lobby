@@ -2651,6 +2651,9 @@ const fishing = createFishing({
   scene,
   button: document.querySelector("#fish"),
   say: (text) => showBubble(sprite, text),
+  feetDepth: (mesh) => useFeetDepth(mesh, myFeet, 12),
+  camera,
+  shape: (d) => bodyShape(sprite.material.map, CHARACTER.cfg, d),
 });
 /**
  * Where you could cast from: at the pond's edge (standing or seated), facing the water.
@@ -2746,8 +2749,7 @@ function updateFishing() {
   }
   if (fishing.choosing() && (gamePaused || !fishSpot())) fishing.closePicker();
   if (fishRestored && s && Math.hypot(pos.x - s.x, pos.z - s.z) > FISH_LEAVE) fishing.reelIn(), (s = null);
-  const face = s ? s.face : dir;
-  fishing.draw(now, { x: sprite.position.x, y: sprite.position.y, z: sprite.position.z, dir: face }, FACING[face]);
+  fishing.draw(now, sprite, dir);
   const p = fishing.phase(now),
     here = s ? null : fishSpot();
   fishBtn.hidden = p === "idle" && !here;

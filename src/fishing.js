@@ -60,6 +60,68 @@ function fishCanvas(P) {
   return cv;
 }
 
+const ROD_PX = 64,
+  ROD_PAD = 16,
+  ROD_LIFT = 0.225;
+const ROD_ART = { right: [[21, 27], [31, 16]], down: [[22, 25], [28, 38]], up: [[23, 23], [26, 10]] };
+const ROD_BACK = { right: [[21, 26], [14, 14]], down: [[22, 25], [24, 12]], up: [[23, 23], [21, 10]] }; // raised, before the throw
+const PX = 5 / 32; // one pixel of the trainer, in world units
+const CAST_MS = 800,
+  WIND_UP = 0.35; // share of the cast spent with the rod raised
+const ROD = { grip: "#2b2b33", wood: "#9a6a3a", shade: "#6b4423", tip: "#e8d9a8", reel: "#c8ccd4", crank: "#7d828f" };
+/**
+ * Draws the rod in pixel art for one direction, on a canvas twice the trainer's 32px frame (the
+ * frame sits in the middle), at the trainer's own pixel size. "left" mirrors "right".
+ * @param {string} dir "down" | "up" | "left" | "right"
+ * @param {boolean} [back] raised behind the shoulder, as before a throw
+ * @param {{shift: number, drop: number} | null} [shape] how far this trainer's body is from where the art expects it
+ * @returns {{tex: THREE.CanvasTexture, u: number, v: number}} texture, and the tip on the rod's plane
+ */
+function rodArt(dir, back, shape) {
+  const art = back ? ROD_BACK : ROD_ART;
+  const [[ax, ay], [bx, by]] = art[dir === "left" ? "right" : dir] || art.down;
+  const sx = shape?.shift || 0,
+    sy = shape?.drop || 0;
+  const flip = (x) => (dir === "left" ? 31 - x - sx : x + sx);
+  const cv = Object.assign(document.createElement("canvas"), { width: ROD_PX, height: ROD_PX });
+  const c = cv.getContext("2d");
+  const dot = (x, y, col) => ((c.fillStyle = col), c.fillRect(flip(x) + ROD_PAD, y + sy + ROD_PAD, 1, 1));
+  const n = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+  const steep = Math.abs(by - ay) > Math.abs(bx - ax);
+  for (let i = 0; i <= n; i++) {
+    const x = Math.round(ax + ((bx - ax) * i) / n),
+      y = Math.round(ay + ((by - ay) * i) / n);
+    if (i < n / 2) dot(steep ? x + 1 : x, steep ? y : y + 1, i < 3 ? ROD.grip : ROD.shade);
+    if (i === 4) dot(steep ? x + 2 : x, steep ? y : y + 2, ROD.reel), dot(steep ? x + 2 : x + 1, steep ? y + 1 : y + 2, ROD.crank);
+    dot(x, y, i < 3 ? ROD.grip : i > n - 3 ? ROD.tip : ROD.wood);
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return { tex, u: (flip(bx) + ROD_PAD + 0.5) / ROD_PX - 0.5, v: 0.5 - (by + sy + ROD_PAD + 0.5) / ROD_PX + ROD_LIFT };
+}
+
+/**
+ * @param {string[]} rows one string per pixel row, one letter per pixel ("." is empty)
+ * @param {Record<string, string>} colors letter -> colour
+ * @returns {THREE.CanvasTexture} pixel-art texture
+ */
+function pixelTexture(rows, colors) {
+  const cv = Object.assign(document.createElement("canvas"), { width: rows[0].length, height: rows.length });
+  const c = cv.getContext("2d");
+  rows.forEach((row, y) => [...row].forEach((k, x) => colors[k] && ((c.fillStyle = colors[k]), c.fillRect(x, y, 1, 1))));
+  const tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = tex.minFilter = THREE.NearestFilter;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+const BOBBER = [".k.", "hrr", "rrr", "www", ".w."];
+const BOBBER_COLORS = { k: "#2b2b33", r: "#e0402a", h: "#ff8a6b", w: "#f2efe6" };
+const RING = 16;
+const RING_ROWS = Array.from({ length: RING }, (_, y) =>
+  Array.from({ length: RING }, (_, x) => (Math.abs(Math.hypot(x - 7.5, y - 7.5) - 6.5) < 0.6 ? "o" : ".")).join(""),
+);
+
 const load = (k, fallback) => {
   try { return JSON.parse(localStorage.getItem(k)) ?? fallback; } catch { return fallback; }
 };
@@ -110,8 +172,11 @@ const clock = (ms) => {
  * @param {THREE.Scene} o.scene
  * @param {HTMLButtonElement} o.button HUD button that shows the time left
  * @param {(text: string) => void} o.say bubble over your trainer (only you see it)
+ * @param {(mesh: THREE.Mesh) => void} o.feetDepth gives the rod the same depth as your trainer
+ * @param {THREE.Camera} o.camera
+ * @param {(dir: string) => {shift: number, drop: number} | null} o.shape where your trainer's body is on its frame (null while its sheet loads)
  */
-export function createFishing({ scene, button, say }) {
+export function createFishing({ scene, button, say, feetDepth, camera, shape }) {
   let state = load("fishing", { phase: "idle" });
   if (state?.phase !== "out") state = { phase: "idle" };
   let confirmUntil = 0,
@@ -121,73 +186,176 @@ export function createFishing({ scene, button, say }) {
   /** @returns {"idle" | "focus" | "bite"} */
   const phase = (now = Date.now()) => (state.phase !== "out" ? "idle" : now < state.end ? "focus" : "bite");
 
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, 1, 6), new THREE.MeshLambertMaterial({ color: "#8a5a2e" }));
-  const LINE_PTS = 16;
-  const line = new THREE.Line(
-    new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(new Float32Array(LINE_PTS * 3), 3)),
-    new THREE.LineBasicMaterial({ color: "#e9e6dc", transparent: true, opacity: 0.75 }),
+  const rods = {};
+  const rodTex = rodArt("down").tex;
+  const rod = new THREE.Mesh(
+    new THREE.PlaneGeometry(1, 1).translate(0, ROD_LIFT, 0),
+    new THREE.MeshLambertMaterial({ map: rodTex, emissiveMap: rodTex, emissive: 0xffffff, emissiveIntensity: 0.7, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide }),
   );
-  line.frustumCulled = false;
-  const bobber = new THREE.Group();
-  const half = (color, flip) => {
-    const m = new THREE.Mesh(
-      new THREE.SphereGeometry(0.24, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2),
-      new THREE.MeshLambertMaterial({ color, emissive: color, emissiveIntensity: 0.25, flatShading: true }),
-    );
-    if (flip) m.rotation.x = Math.PI;
-    return m;
+  rod.scale.set(10, 10, 1);
+  feetDepth(rod);
+  // the line: square dots on a screen grid about one trainer pixel wide, one dot per step, like a
+  // line drawn in pixel art
+  const LINE_PTS = 240,
+    LINE_SAMPLES = 360;
+  const lineGrid = { value: 2 },
+    lineRes = { value: new THREE.Vector2(1, 1) };
+  const line = new THREE.Points(
+    new THREE.BufferGeometry().setAttribute("position", new THREE.BufferAttribute(new Float32Array(LINE_PTS * 3), 3)),
+    new THREE.PointsMaterial({ color: "#e9e6dc", size: 2, sizeAttenuation: false }),
+  );
+  line.material.onBeforeCompile = (shader) => {
+    shader.uniforms.uGrid = lineGrid;
+    shader.uniforms.uRes = lineRes;
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", "#include <common>\nuniform float uGrid;\nuniform vec2 uRes;")
+      .replace(
+        "#include <project_vertex>",
+        `#include <project_vertex>
+vec2 cell = (gl_Position.xy / gl_Position.w * 0.5 + 0.5) * uRes;
+cell = (floor(cell / uGrid) + 0.5) * uGrid;
+gl_Position.xy = (cell / uRes * 2.0 - 1.0) * gl_Position.w;`,
+      );
   };
-  bobber.add(half("#e0402a"), half("#f2efe6", true));
+  line.frustumCulled = false;
+  const bobberTex = pixelTexture(BOBBER, BOBBER_COLORS);
+  const bobber = new THREE.Mesh(
+    new THREE.PlaneGeometry(BOBBER[0].length * PX, BOBBER.length * PX).translate(0, (BOBBER.length / 2 - 1) * PX, 0), // one row under water
+    new THREE.MeshLambertMaterial({ map: bobberTex, emissiveMap: bobberTex, emissive: 0xffffff, emissiveIntensity: 0.5, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide }),
+  );
   const ripple = new THREE.Mesh(
-    new THREE.RingGeometry(0.32, 0.4, 24),
-    new THREE.MeshBasicMaterial({ color: "#cfe6ff", transparent: true, opacity: 0, depthWrite: false }),
+    new THREE.PlaneGeometry(1, 1),
+    new THREE.MeshBasicMaterial({ map: pixelTexture(RING_ROWS, { o: "#cfe6ff" }), transparent: true, opacity: 0, depthWrite: false }),
   );
   ripple.rotation.x = -Math.PI / 2;
   const gear = [rod, line, bobber, ripple];
   gear.forEach((o) => ((o.visible = false), scene.add(o)));
+  // where the bobber lands: rings that open and fade on the water, like the rain's splashes
+  const SPLASH_SIZES = [2.4, 3.4, 4.4],
+    SPLASH_GAP = 0.12,
+    SPLASH_SPEED = 3.2;
+  const splashGeo = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
+  const splashes = SPLASH_SIZES.map(() => {
+    const m = new THREE.Mesh(
+      splashGeo,
+      new THREE.ShaderMaterial({
+        uniforms: { uAge: { value: 1 }, uColor: { value: new THREE.Color("#cfe6ff") } },
+        transparent: true,
+        depthWrite: false,
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        vertexShader: `varying vec2 vUv;
+          void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+        fragmentShader: `uniform float uAge; uniform vec3 uColor; varying vec2 vUv;
+          void main() {
+            float ring = smoothstep(0.2, 0.0, abs(length(vUv * 2.0 - 1.0) - 0.75));
+            float a = ring * (1.0 - uAge);
+            if (a < 0.01) discard;
+            gl_FragColor = vec4(uColor, a);
+          }`,
+      }),
+    );
+    m.renderOrder = 10;
+    m.visible = false;
+    scene.add(m);
+    return m;
+  });
 
-  const _hand = new THREE.Vector3(),
-    _tip = new THREE.Vector3(),
-    _up = new THREE.Vector3(0, 1, 0),
-    _d = new THREE.Vector3();
-  const SIDE = { down: [0.9, 0.3, 1.4], up: [-0.7, 0, -0.6], left: [0, 0.3, 0], right: [0, 0.3, 0] };
+  const _tip = new THREE.Vector3(),
+    _end = new THREE.Vector3(),
+    _p = new THREE.Vector3();
+  const cx = [],
+    cy = [],
+    cz = [];
+  let castAt = 0,
+    landed = true,
+    landAt = 0;
   /**
-   * Places the rod, line and bobber for this frame (hidden while idle).
+   * Places the rod, line and bobber for this frame (hidden while idle). The rod is drawn over the
+   * trainer and turns with it; the line runs from the rod's tip to the bobber. Right after a cast
+   * the rod goes up and the bobber flies out to the water.
    * @param {number} now Date.now()
-   * @param {{x: number, y: number, z: number, dir: string}} trainer
-   * @param {[number, number]} facing direction the line was cast to
+   * @param {THREE.Mesh} body your trainer's sprite
+   * @param {string} dir the way the trainer faces now
    */
-  function draw(now, trainer, facing) {
+  function draw(now, body, dir) {
     const p = phase(now);
     gear.forEach((o) => (o.visible = p !== "idle"));
-    if (p === "idle") return;
+    if (p === "idle") return splashes.forEach((m) => (m.visible = false));
     const t = now / 1000;
+    const a = (now - castAt) / CAST_MS;
+    const windUp = a < WIND_UP,
+      flying = a < 1;
     const { x: tx, y: ty, z: tz } = state.target;
-    const tug = p === "bite" ? Math.max(0, Math.sin(t * 9)) * 0.28 : 0;
-    bobber.position.set(tx, ty + 0.06 + Math.sin(t * 1.8) * 0.04 - tug, tz);
+
+    const sh = shape(dir);
+    const key = dir + (windUp ? "b" : "");
+    const art = rods[key] || rodArt(dir, windUp, sh);
+    if (sh) rods[key] = art;
+    rod.material.map = rod.material.emissiveMap = art.tex;
+    rod.position.copy(body.position);
+    rod.rotation.copy(body.rotation);
+    if (p === "bite" && Math.sin(t * 9) > 0) rod.position.y -= PX; // tugged one pixel down
+    rod.updateMatrixWorld();
+    rod.localToWorld(_tip.set(art.u, art.v, 0));
+    // a tip drawn below the feet would put the line under the ground: slide it toward the camera
+    // (the same spot on screen) until it is above the ground
+    const low = body.position.y + 1;
+    if (_tip.y < low) _tip.lerpVectors(camera.position, _tip, (low - camera.position.y) / (_tip.y - camera.position.y));
+
+    if (windUp) bobber.position.set(_tip.x, _tip.y - 3 * PX, _tip.z);
+    else if (flying) {
+      const e = (a - WIND_UP) / (1 - WIND_UP);
+      bobber.position.lerpVectors(_tip, _p.set(tx, ty + 0.06, tz), e).y += Math.sin(Math.PI * e) * 2;
+    } else {
+      if (!landed) (landed = true), (landAt = now), tone(700, 180, 0, 0.16, 0.1);
+      const tug = p === "bite" ? Math.max(0, Math.sin(t * 9)) * 0.28 : 0;
+      bobber.position.set(tx, ty + 0.06 + Math.sin(t * 1.8) * 0.04 - tug, tz);
+    }
+    bobber.rotation.copy(body.rotation);
+    splashes.forEach((m, i) => {
+      const age = ((now - landAt) / 1000 - i * SPLASH_GAP) * SPLASH_SPEED;
+      m.visible = age >= 0 && age < 1;
+      if (!m.visible) return;
+      m.material.uniforms.uAge.value = age;
+      m.position.set(tx, ty + 0.05, tz);
+      m.scale.setScalar(SPLASH_SIZES[i] * (0.4 + age) * 0.45);
+    });
+    ripple.visible = !flying;
     const period = p === "bite" ? 0.7 : 2.6;
     const k = (t % period) / period;
     ripple.position.set(tx, ty + 0.02, tz);
     ripple.scale.setScalar(1 + k * (p === "bite" ? 4 : 2.5));
     ripple.material.opacity = (1 - k) * (p === "bite" ? 0.6 : 0.3);
-    const [sx, sz, lean] = SIDE[trainer.dir] || SIDE.down;
-    _hand.set(trainer.x + sx, trainer.y + 1.7, trainer.z + sz);
-    _tip.set(_hand.x + facing[0] * 2.2 + lean, _hand.y + 1.5 + (p === "bite" ? -0.3 + Math.sin(t * 9) * 0.15 : 0), _hand.z + facing[1] * 2.2);
-    _d.subVectors(_tip, _hand);
-    rod.position.copy(_hand).addScaledVector(_d, 0.5);
-    rod.scale.set(1, _d.length(), 1);
-    rod.quaternion.setFromUnitVectors(_up, _d.normalize());
-    const pos = line.geometry.attributes.position;
-    const sag = p === "bite" ? 0.1 : 0.9;
-    for (let i = 0; i < LINE_PTS; i++) {
-      const u = i / (LINE_PTS - 1);
-      pos.setXYZ(
-        i,
-        _tip.x + (bobber.position.x - _tip.x) * u,
-        _tip.y + (bobber.position.y + 0.2 - _tip.y) * u - Math.sin(Math.PI * u) * sag,
-        _tip.z + (bobber.position.z - _tip.z) * u,
-      );
+
+    // the line's curve, turned into grid cells on screen: one cell per step, no doubled corners
+    camera.updateMatrixWorld();
+    const W = innerWidth,
+      H = innerHeight;
+    const g = Math.max(2, Math.floor((PX * camera.projectionMatrix.elements[5] * H) / 2 / camera.position.distanceTo(body.position)));
+    lineRes.value.set(W, H);
+    lineGrid.value = line.material.size = g;
+    _end.copy(bobber.position).y += 3 * PX;
+    const sag = flying ? 0 : p === "bite" ? 0.1 : Math.min(0.9, Math.hypot(_end.x - _tip.x, _end.z - _tip.z) * 0.2);
+    let n = 0;
+    for (let i = 0; i <= LINE_SAMPLES; i++) {
+      const u = i / LINE_SAMPLES;
+      _p.lerpVectors(_tip, _end, u).y -= Math.sin(Math.PI * u) * sag;
+      if (!flying) _p.y = Math.max(_p.y, ty + 0.05);
+      _p.project(camera);
+      const x = Math.floor(((_p.x * 0.5 + 0.5) * W) / g),
+        y = Math.floor(((_p.y * 0.5 + 0.5) * H) / g);
+      if (n && cx[n - 1] === x && cy[n - 1] === y) continue;
+      while (n >= 2 && Math.max(Math.abs(cx[n - 2] - x), Math.abs(cy[n - 2] - y)) <= 1) n--;
+      (cx[n] = x), (cy[n] = y), (cz[n] = _p.z), n++;
     }
+    n = Math.min(n, LINE_PTS);
+    const pos = line.geometry.attributes.position;
+    for (let i = 0; i < n; i++) {
+      _p.set((((cx[i] + 0.5) * g) / W) * 2 - 1, (((cy[i] + 0.5) * g) / H) * 2 - 1, cz[i]).unproject(camera);
+      pos.setXYZ(i, _p.x, _p.y, _p.z);
+    }
+    line.geometry.setDrawRange(0, n);
     pos.needsUpdate = true;
   }
 
@@ -247,6 +415,8 @@ export function createFishing({ scene, button, say }) {
     unlockAudio();
     card.hidden = true;
     setState({ phase: "out", end: Date.now() + minutes * MIN, minutes, ...spot });
+    castAt = Date.now();
+    landed = false;
     tone(500, 260, 0, 0.12, 0.12);
     say(`line's out: ${minutes} min of focus`);
   }
