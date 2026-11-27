@@ -46,8 +46,9 @@ others can go.
   no upside-down loop.
 - **A countdown over the station** (`#coaster-sign`), for whoever is near it or riding: the seconds left
   to board, then the seconds until the train is back.
-- **Collision**: the station's deck and the posts on the grass (`onCoaster`); posts in the pond stand
-  where nobody walks anyway. Cats and the placement searches avoid them too (`onRide`).
+- **Collision**: only the station's deck (`onCoaster`). The track's posts block nobody: they left
+  only narrow gaps on the grass below the pond. Cats and the placement searches avoid the deck too
+  (`onRide`).
 - As with the other rides, what moves casts no shadow and riders are not lamp shadow movers.
 
 ## Alternatives considered

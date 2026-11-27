@@ -147,13 +147,12 @@ export function coasterSeat(i, t, groundY) {
 }
 
 // ---- Collision ----
-// The deck and the posts on the grass (those over the pond stand where nobody walks anyway).
-const landPosts = []; // [x, z] of each post on the grass, filled as the model is built
-/** @returns {boolean} the point is on the station's deck or by a post, within `r` */
+// Only the station's deck. The track's posts block nobody: thin as they are, they left only narrow
+// gaps on the grass below the pond, so trainers walk through them.
+/** @returns {boolean} the point is on the station's deck, or within `r` of it */
 export function onCoaster(x, z, r = 0) {
   const s = COASTER.station;
-  if (x > s.x0 - r && x < s.x1 + r && z > s.z0 - r && z < s.z1 + r) return true;
-  return landPosts.some(([px, pz]) => Math.hypot(x - px, z - pz) < 0.35 + r);
+  return x > s.x0 - r && x < s.x1 + r && z > s.z0 - r && z < s.z1 + r;
 }
 
 // ---- Model ----
@@ -223,8 +222,6 @@ export function createCoaster() {
       const foot = p.clone().setY(-1.5);
       parts.push(strut(foot, p.clone().setY(p.y - 0.2), 0.24, WHITE));
       parts.push(strut(left[i].clone().setY(p.y - 0.25), right[i].clone().setY(p.y - 0.25), 0.18, WHITE));
-      const onWater = p.x > -10.6 && p.x < 10.6 && p.z < 37.6;
-      if (!onWater) landPosts.push([p.x, p.z]);
     }
   }
   for (const rail of [left, right]) {
