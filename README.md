@@ -37,6 +37,7 @@ Open the URL, pick a trainer and press **enter the room**: the click is what let
 | Enter | open the chat; it stays open after sending · Esc or Enter on an empty box goes back to walking |
 | @ in the chat | mention someone in the room (Tab or Enter picks the name); everyone reads it, but it is highlighted for them |
 | G | switch trainer |
+| C, or the sitting button | sit on the ground, facing the way you stand (any move gets you up) |
 | N or the day/night button | switch between day and night for you |
 | R or the rain button | turn the rain on or off for you (greyer sky by day) |
 | F or the full screen button | enter or leave full screen (hidden where the browser can't, e.g. iPhone) |

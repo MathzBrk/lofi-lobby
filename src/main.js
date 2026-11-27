@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
 import { createBoard, setupWall } from "./board.js";
+import { addSitFrames, sitFramePos } from "./ground-sit.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
 import { createFishing, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
 
@@ -1487,6 +1488,13 @@ addEventListener("keydown", (e) => {
 // (4 directions x 4 steps, 32px frames, 2px gap).
 // male: green cap, orange jacket, purple backpack.
 // female: coral beanie, long hair, teal coat, skirt, yellow bag.
+// a trainer's sheet with its sitting-on-the-ground frames drawn under it (src/ground-sit.js); the row's
+// place rides on the canvas
+function withSitFrames(cv, cfg) {
+  const { canvas, row } = addSitFrames(cv, cfg, framePos);
+  canvas.sitRow = row;
+  return canvas;
+}
 function generateOriginalTrainer(gender = "male", cap = null) {
   const fem = gender === "female";
   const {
@@ -1591,7 +1599,7 @@ function generateOriginalTrainer(gender = "male", cap = null) {
       }
     }
   });
-  return cv;
+  return withSitFrames(cv, GRID);
 }
 // Lit "billboard" plane: receives lamp light and casts a shadow
 // with the sprite's cutout (alphaTest on the depth materials too).
@@ -1656,7 +1664,10 @@ function removeBackground(t, cfg = CHARACTER.cfg, gender = GENDER, cap = myCap()
   }
   recolorCap(d.data, cv.width, gender, cap);
   ctx.putImageData(d, 0, 0);
-  t.image = cv;
+  // the sitting row makes the image taller, and a texture already on the GPU can't change size:
+  // dispose of it so the next frame uploads a new one with the new image
+  t.dispose();
+  t.image = withSitFrames(cv, cfg);
   t.needsUpdate = true;
 }
 
@@ -2019,6 +2030,42 @@ holdBtn.addEventListener("click", (e) => {
   e.currentTarget.blur(); // give the keyboard back to the game
 });
 
+// ---- Sitting on the ground (C, or the button in the top card) ----
+// You sit down facing the way you stand; everyone sees it, also whoever joins later. Walking, sitting on
+// a bench or pressing C again gets you up.
+let onGround = false,
+  lastGround = 0;
+const sendGround = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "ground", on: onGround }));
+const groundBtn = document.querySelector("#ground-sit");
+function setGround(on) {
+  const now = performance.now();
+  if (on && (gamePaused || mySeat >= 0 || now - lastGround < 350)) return; // stays under the server's rate limit
+  if (on === onGround) return;
+  lastGround = now;
+  onGround = on;
+  groundBtn.classList.toggle("on", on);
+  groundBtn.setAttribute("aria-label", on ? "stand up" : "sit on the ground");
+  sendGround();
+}
+// the sitting frame facing `d` (false if this texture has none yet)
+function setSitFrameTex(tex, d) {
+  const img = tex.image,
+    row = img?.sitRow;
+  if (!row) return false;
+  const { x, y, w, h } = sitFramePos(row, d);
+  tex.repeat.set(w / img.width, h / img.height);
+  tex.offset.set(x / img.width, 1 - (y + h) / img.height);
+  return true;
+}
+groundBtn.addEventListener("click", (e) => {
+  setGround(!onGround);
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+addEventListener("keydown", (e) => {
+  if (typing() || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key.toLowerCase() === "c") setGround(!onGround);
+});
+
 // each sit/stand is numbered and the server's corrections carry the number back, so a late
 // answer to an older request can't stand you up from the seat you have now
 let sitN = 0;
@@ -2037,6 +2084,7 @@ function nearestFreeSeat() {
 function sit(id) {
   const s = seatSpot(id);
   if (!s) return;
+  setGround(false);
   mySeat = id;
   const [ox, oz] = [pos.x, pos.z];
   pos.set(s.x, s.y, s.z);
@@ -2256,6 +2304,7 @@ function createOther(p) {
         () => {
           failedSheets.add(g);
           o.cfg = GRID;
+          tex.dispose(); // a different size from the sheet: a new texture on the GPU
           tex.image = generateOriginalTrainer(g, cap);
           tex.needsUpdate = true;
         },
@@ -2293,6 +2342,7 @@ function createOther(p) {
     step: p.step || 0,
     seat: Number.isInteger(p.seat) ? p.seat : -1,
     hold: p.hold | 0,
+    ground: !!p.ground, // on joining: someone already sitting on the ground
     name: p.name,
     gender: g,
     color: p.color,
@@ -2337,6 +2387,7 @@ function connect() {
     sock.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, color: COLOR, cap: myCap(), x: pos.x, z: pos.z, dir }));
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
     if (myHold) sendHold();
+    if (onGround) sendGround(); // reconnected while sitting on the ground
     // a saved admin logs in again quietly, so everyone sees the admin badge
     let password = "";
     try { password = localStorage.getItem("admin-password") || ""; } catch {}
@@ -2426,6 +2477,9 @@ function connect() {
     } else if (m.t === "hold") {
       const o = others.get(m.id);
       if (o) o.hold = m.item | 0;
+    } else if (m.t === "ground") {
+      const o = others.get(m.id);
+      if (o) o.ground = !!m.on;
     } else if (m.t === "seat") {
       // the server says who sits where. About you, it only answers a refused or dropped sit:
       // you're not on the seat you asked for, so stand up; or the room still has you seated
@@ -2522,12 +2576,15 @@ function updateOthers(dt) {
     m.rotation.copy(sprite.rotation);
     // running uses the run frames of the same sheet, like your own trainer (not on the code-drawn fallback)
     const running = o.run && !seat && o.cfg === CROP[o.gender];
-    setFrameTex(o.tex, running ? RUN_CROP[o.gender] : o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
+    // on the ground, facing the way they stood (walking or a bench gets them up)
+    if (o.ground && (seat || o.step)) o.ground = false;
+    const grounded = o.ground && setSitFrameTex(o.tex, o.dir);
+    if (!grounded) setFrameTex(o.tex, running ? RUN_CROP[o.gender] : o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
     m.userData.lift = running && o.gender === "male" ? 0.8 : 0; // the male run frames sit higher in their cell
     m.position.y -= m.userData.lift;
     // standing still: on the standing frame, a moment after the last step arrived
     const still = !o.step && performance.now() - (o.movedAt || 0) > 300;
-    const hd = heldDir(o.hold, seat, still, o.dir);
+    const hd = grounded ? null : heldDir(o.hold, seat, still, o.dir); // the coffee is drawn for a standing body
     if (o.held || hd) showHeld((o.held ??= createHeld(o.feet)), m, o.cfg, o.hold, hd);
   }
 }
@@ -3117,8 +3174,11 @@ function loop() {
   } else tAnim = 0;
   const currentStep = walking ? Math.floor(tAnim) % CHARACTER.steps : 0;
   const running = Boolean(walking && run);
-  setFrame(dir, currentStep, running);
-  sendPosition(performance.now(), currentStep, running);
+  const now = performance.now();
+  if (onGround && walking) setGround(false); // moving gets you up
+  const grounded = onGround && setSitFrameTex(sheetTex, dir); // facing the way you stood
+  if (!grounded) setFrame(dir, currentStep, running);
+  sendPosition(now, currentStep, running);
   const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
   eNow = eAction(freeSeat);
   updateHoldButton();
@@ -3144,7 +3204,7 @@ function loop() {
   updateOcclusion();
   // facing the camera, tilted only halfway (the shadow looks like a standing body)
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
-  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, heldDir(myHold, mySeat >= 0 ? seatSpot(mySeat) : null, !walking, dir));
+  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, grounded ? null : heldDir(myHold, mySeat >= 0 ? seatSpot(mySeat) : null, !walking, dir));
 
   updateLampShadows([sprite, capy.mesh, ...[...others.values()].map((o) => o.mesh)]);
   renderer.render(scene, camera);
