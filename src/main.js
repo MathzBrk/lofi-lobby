@@ -3296,6 +3296,9 @@ function throwStone() {
 }
 // someone else threw one: the same path, from their hand
 function stoneThrown(m) {
+  // with the tab hidden nothing is drawn: a stone thrown now would wait, and all the stones thrown
+  // meanwhile would fly at once when you come back. It was thrown while you weren't looking: skip it
+  if (document.hidden) return;
   const o = others.get(m.id);
   const pts = Array.isArray(m.pts) ? m.pts.filter((p) => Array.isArray(p) && p.every(Number.isFinite)).slice(0, 6) : [];
   if (o && pts.length) stones.launch(handOf(o.mesh.position), pts);
