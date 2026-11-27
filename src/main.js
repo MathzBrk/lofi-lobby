@@ -2424,7 +2424,8 @@ function connect() {
         if (o) o.seat = m.seat;
       }
     } else if (m.t === "pos") {
-      const o = others.get(m.id) || createOther(m);
+      const o = others.get(m.id);
+      if (!o) return;
       if (o.target.x !== m.x || o.target.z !== m.z) o.movedAt = performance.now();
       o.target.set(m.x, 0, m.z);
       o.dir = m.dir;
