@@ -2911,7 +2911,7 @@ function updateCapy() {
 // ---- Skipping stones (T by the pond) ----
 // You plan the throw (where the stone touches the water), see it at once, and the room sends it to
 // everyone; others animate the same path from your hand (src/stones.js).
-const stones = createStones(scene, { surfaceY: (x, z) => topHeight(x, z) });
+const stones = createStones(scene, { surfaceY: (x, z) => topHeight(x, z), camera });
 const STONE_NEAR = 4.5; // how close to the pond you must be
 const STONE_EVERY_MS = 1200;
 let lastStone = 0;

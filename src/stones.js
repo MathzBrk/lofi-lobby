@@ -8,9 +8,28 @@ const FLIGHT_MS = 800; // from the hand to the first touch
 const SINK_MS = 500;
 const GRAVITY = 18; // for the drops
 
-// low-poly pebble, like the town's flat-shaded props
-const stoneGeometry = new THREE.IcosahedronGeometry(0.38, 0).scale(1.3, 0.75, 1);
-const stoneMaterial = new THREE.MeshLambertMaterial({ color: "#8d8f99", flatShading: true });
+// a pixel-art pebble at the trainers' own pixel size, on a plane that faces the camera like they do:
+// a flat stone shaded from light to dark, no outline; four frames flip it over (top, tilted, edge-on,
+// underside) so it tumbles as it flies
+const PX = 5 / 32; // one pixel of a trainer, in world units
+const STONE_COLORS = { h: "#eceef5", l: "#b9bdc9", m: "#8d909c", d: "#656876" };
+const STONE_FRAMES = [
+  [".hhll.", "hllllm", "lllmmd", "mmmddd", ".dddd."],
+  [".hhll.", "hllmmd", "mmdddd", ".dddd.", "......"],
+  ["......", "hhllmd", "mmdddd", "......", "......"],
+  [".lllm.", "lmmmdd", "hhlldd", ".dddd.", "......"],
+];
+const stoneGeometry = new THREE.PlaneGeometry(STONE_FRAMES[0][0].length * PX, STONE_FRAMES[0].length * PX);
+const stoneMaterials = STONE_FRAMES.map((rows) => {
+  const cv = Object.assign(document.createElement("canvas"), { width: rows[0].length, height: rows.length });
+  const c = cv.getContext("2d");
+  rows.forEach((row, y) => [...row].forEach((k, x) => STONE_COLORS[k] && ((c.fillStyle = STONE_COLORS[k]), c.fillRect(x, y, 1, 1))));
+  const map = new THREE.CanvasTexture(cv);
+  map.magFilter = map.minFilter = THREE.NearestFilter;
+  map.colorSpace = THREE.SRGBColorSpace;
+  // glows a little, like what the trainers hold, to stay readable at night
+  return new THREE.MeshLambertMaterial({ map, emissiveMap: map, emissive: 0xffffff, emissiveIntensity: 0.4, transparent: true, alphaTest: 0.05, side: THREE.DoubleSide });
+});
 
 // rings on the water: a thin bright circle that grows and fades
 const ringMaterial = new THREE.ShaderMaterial({
@@ -34,7 +53,7 @@ const ringGeometry = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
 // drops: tiny squares flying up and falling back
 const dropMaterial = new THREE.PointsMaterial({ color: "#dff1ff", size: 0.4, transparent: true, depthWrite: false });
 
-export function createStones(scene, { surfaceY }) {
+export function createStones(scene, { surfaceY, camera }) {
   const throws = new Set(); // flying stones
   const rings = new Set(); // { mesh, age, life, size }
   const bursts = new Set(); // { points, vel, age, life }
@@ -73,8 +92,7 @@ export function createStones(scene, { surfaceY }) {
   // from: { x, y, z } (the hand); touches: [[x, z], ...] on the water, the last one is where it sinks
   function launch(from, touches) {
     if (!touches.length) return;
-    const mesh = new THREE.Mesh(stoneGeometry, stoneMaterial);
-    mesh.castShadow = true;
+    const mesh = new THREE.Mesh(stoneGeometry, stoneMaterials[0]);
     mesh.position.set(from.x, from.y, from.z);
     scene.add(mesh);
     // the legs of the path: the throw, then one hop per skip, each shorter in time and lower
@@ -91,15 +109,16 @@ export function createStones(scene, { surfaceY }) {
       t += ms;
       a = { x, y, z };
     });
-    throws.add({ mesh, legs, t: 0, end: t, sinking: 0, spin: 9 + Math.random() * 6, hit: 0 });
+    throws.add({ mesh, legs, t: 0, end: t, sinking: 0, spin: 9 + Math.random() * 6, turn: 0, hit: 0 });
   }
 
   function update(dt) {
     const ms = dt * 1000;
     for (const s of throws) {
       s.t += ms;
-      s.mesh.rotation.y += s.spin * dt;
-      s.mesh.rotation.z += s.spin * 0.5 * dt;
+      s.turn += s.spin * dt;
+      s.mesh.material = stoneMaterials[Math.floor(s.turn / (Math.PI / 2)) % STONE_FRAMES.length];
+      s.mesh.rotation.set(camera.rotation.x * 0.5, 0, 0); // tilted halfway to the camera, like the trainers
       // every touch the stone has reached: a ring and drops (more on the last one)
       while (s.hit < s.legs.length && s.t >= s.legs[s.hit].t + s.legs[s.hit].ms) {
         const { b, last } = s.legs[s.hit];
@@ -116,10 +135,9 @@ export function createStones(scene, { surfaceY }) {
           leg.a.z + (leg.b.z - leg.a.z) * f,
         );
       } else {
-        // sinking: down through the surface, then gone
+        // sinking: down through the surface (the water covers it), then gone
         s.sinking += ms / SINK_MS;
-        s.mesh.position.y -= dt * 1.2;
-        s.mesh.scale.setScalar(Math.max(0, 1 - s.sinking));
+        s.mesh.position.y -= dt * 1.6;
         if (s.sinking >= 1) {
           scene.remove(s.mesh);
           throws.delete(s);
