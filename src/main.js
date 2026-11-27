@@ -3114,7 +3114,7 @@ function getOffWheel(notify) {
   mySeat = -1;
   if (s) {
     const z = WHEEL.z + WHEEL.halfDepth + 1.4;
-    const x0 = Math.max(WHEEL.x - WHEEL.halfWidth, Math.min(WHEEL.x + WHEEL.halfWidth, s.x));
+    const x0 = Math.max(WHEEL.x - WHEEL.west, Math.min(WHEEL.x + WHEEL.east, s.x));
     search: for (let d = 0; d <= 6; d += 0.5)
       for (const x of [x0 + d, x0 - d]) {
         const ground = groundHeight(x, z);
