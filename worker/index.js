@@ -17,7 +17,7 @@
 //                     { t: "chat", id, name, color, text, at } | { t: "name", id, name } | { t: "color", id, color }
 //                     { t: "gender", id, gender, cap } | { t: "radio", command } | { t: "error", msg }
 //                     { t: "ground", id, on }   (that player sat on the ground or got up)
-//                     { t: "hold", item }   (what you hold: 0 nothing, 1 laptop, 2 coffee, 3 book; the client decides when it shows)
+//                     { t: "hold", item }   (what you hold: 0 nothing, 1 laptop, 2 coffee, 3 book, 4 cigarette; the client decides when it shows)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "capy", at, until, lost, phrase }   (the capybara was fed: it sits from at to until, room clock;
 //                                                               lost = all its sitting before; phrase picks what it says.
@@ -640,8 +640,8 @@ export class Room {
       ws.serializeAttachment(p);
       this.broadcast({ t: "ground", id: p.id, on: p.ground }, ws);
     } else if (m.t === "hold") {
-      // what the player holds; the client draws it on someone seated, and the coffee also on someone standing still
-      p.hold = [1, 2, 3].includes(m.item) ? m.item : 0;
+      // what the player holds; the client draws it on someone seated, and the coffee or cigarette also on someone standing still
+      p.hold = [1, 2, 3, 4].includes(m.item) ? m.item : 0;
       ws.serializeAttachment(p);
       this.broadcast({ t: "hold", id: p.id, item: p.hold }, ws);
     } else if (m.t === "auth") {
