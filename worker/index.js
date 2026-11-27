@@ -7,6 +7,7 @@
 //                     { t: "capy" }   (feed the capybara)
 //                     { t: "stone", pts: [[x, z], ...] }   (a stone skipped on the pond: where it touched the water, 1 to 6)
 //                     { t: "ground", on }   (sit on the ground, or get up)
+//                     { t: "fish", on, x, z }   (your fishing line is out, the bobber at x, z; or back in)
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
 //                     { t: "who", id, password }   (admin: who is this player)
@@ -19,6 +20,7 @@
 //                     { t: "gender", id, gender, cap } | { t: "radio", command } | { t: "error", msg }
 //                     { t: "stone", id, pts }   (that player skipped a stone; the clients animate it)
 //                     { t: "ground", id, on }   (that player sat on the ground or got up)
+//                     { t: "fish", id, fish }   (that player's line: [x, z] of the bobber, or null when it is in)
 //                     { t: "hold", item }   (what you hold: 0 nothing, 1 laptop, 2 coffee, 3 book, 4 cigarette; the client decides when it shows)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "capy", at, until, lost, phrase }   (the capybara was fed: it sits from at to until, room clock;
@@ -522,7 +524,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap ?? -1, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, ground: !!p.ground, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap ?? -1, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, ground: !!p.ground, fish: p.fish || null, admin: !!p.admin };
   }
   players() {
     return this.openSockets()
@@ -647,6 +649,12 @@ export class Room {
       p.ground = m.on === true;
       ws.serializeAttachment(p);
       this.broadcast({ t: "ground", id: p.id, on: p.ground }, ws);
+    } else if (m.t === "fish") {
+      // the fishing line is out (where the bobber floats, in the town) or back in. Kept on the
+      // player, so whoever joins later sees it; the timer itself stays in that player's browser
+      p.fish = m.on === true ? [number(m.x), number(m.z)] : null;
+      ws.serializeAttachment(p);
+      this.broadcast({ t: "fish", id: p.id, fish: p.fish }, ws);
     } else if (m.t === "hold") {
       // what the player holds; the client draws it on someone seated, and the coffee or cigarette also on someone standing still
       p.hold = [1, 2, 3, 4].includes(m.item) ? m.item : 0;

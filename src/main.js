@@ -5,7 +5,7 @@ import { createBoard, setupWall } from "./board.js";
 import { createStones } from "./stones.js";
 import { addSitFrames, sitFramePos } from "./ground-sit.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
-import { createFishing, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
+import { createFishing, createFishingGear, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
 
 // ---- Asset config (change here to use other files) ----
 const TOWN = {
@@ -2602,6 +2602,7 @@ function createOther(p) {
     seat: Number.isInteger(p.seat) ? p.seat : -1,
     hold: p.hold | 0,
     ground: !!p.ground, // on joining: someone already sitting on the ground
+    fish: fishTarget(p.fish), // on joining: someone whose line is already out
     name: p.name,
     gender: g,
     color: p.color,
@@ -2612,11 +2613,23 @@ function createOther(p) {
   updateCount();
   return o;
 }
+// Another player's line, as the room sent it ([x, z] of the bobber, or nothing): null if it isn't out
+// or isn't two numbers. Its height is found later, on the water (waterY).
+const fishTarget = (v) => (Array.isArray(v) && v.length === 2 && v.every(Number.isFinite) ? { x: v[0], y: null, z: v[1] } : null);
+// that player's rod, line and bobber, made the first time they are needed
+const otherGear = (o) =>
+  (o.gear ??= createFishingGear({
+    scene,
+    camera,
+    feetDepth: (mesh) => useFeetDepth(mesh, o.feet, 12),
+    shape: (d) => bodyShape(o.tex, o.cfg, d),
+  }));
 function removeOther(id) {
   const o = others.get(id);
   if (!o) return;
   scene.remove(o.mesh);
   if (o.held) scene.remove(o.held), o.held.material.dispose();
+  o.gear?.dispose();
   o.tex.dispose();
   others.delete(id);
   updateCount();
@@ -2647,6 +2660,7 @@ function connect() {
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
     if (myHold) sendHold();
     if (onGround) sendGround(); // reconnected while sitting on the ground
+    if (fishing.spot()) sendFish(fishing.spot().target); // reconnected (or reloaded) with the line out
     // a saved admin logs in again quietly, so everyone sees the admin badge
     let password = "";
     try { password = localStorage.getItem("admin-password") || ""; } catch {}
@@ -2740,6 +2754,12 @@ function connect() {
     } else if (m.t === "ground") {
       const o = others.get(m.id);
       if (o) o.ground = !!m.on;
+    } else if (m.t === "fish") {
+      // someone's line went out (where the bobber floats) or came back in
+      const o = others.get(m.id);
+      if (!o) return;
+      o.fish = fishTarget(m.fish);
+      if (o.fish && !document.hidden) otherGear(o).cast(); // seen live: the throw is shown
     } else if (m.t === "seat") {
       // the server says who sits where. About you, it only answers a refused or dropped sit:
       // you're not on the seat you asked for, so stand up; or the room still has you seated
@@ -2846,6 +2866,10 @@ function updateOthers(dt) {
     const still = !o.step && performance.now() - (o.movedAt || 0) > 300;
     const hd = grounded ? null : heldDir(o.hold, seat, still, o.dir); // the coffee is drawn for a standing body
     if (o.held || hd) showHeld((o.held ??= createHeld(o.feet)), m, o.cfg, o.hold, hd);
+    // their rod, line and bobber while their line is out (the bobber's height once the pond is loaded)
+    if (o.fish && o.fish.y === null) o.fish.y = waterY(o.fish.x, o.fish.z);
+    const fishes = o.fish && o.fish.y !== null;
+    if (fishes || o.gear) otherGear(o).draw(Date.now(), m, seat ? seat.dir : o.dir, fishes ? "focus" : "idle", o.fish);
   }
 }
 
@@ -3339,7 +3363,19 @@ const fishing = createFishing({
   feetDepth: (mesh) => useFeetDepth(mesh, myFeet, 12),
   camera,
   shape: (d) => bodyShape(sprite.material.map, CHARACTER.cfg, d),
+  onChange: (target) => sendFish(target),
 });
+// tells the room your line is out (where the bobber is) or back in, so the others see it; the
+// timer stays yours
+const sendFish = (target) =>
+  ws?.readyState === 1 && ws.send(JSON.stringify(target ? { t: "fish", on: true, x: target.x, z: target.z } : { t: "fish", on: false }));
+const _waterFrom = new THREE.Vector3();
+/** @returns {number | null} the height of the water at (x, z), or null where there is none (or the town isn't loaded yet) */
+function waterY(x, z) {
+  ray.set(_waterFrom.set(x, 200, z), DOWN);
+  const hit = ray.intersectObjects([...waterMeshes], false)[0];
+  return hit ? hit.point.y : null;
+}
 /**
  * Where you could cast from: at the pond's edge (standing or seated), facing the water.
  * @returns {{x: number, z: number, d: number, face: string, seat: number} | null} d: distance to the pond's box
@@ -3359,7 +3395,6 @@ function fishSpot() {
   if ((fx * (cx - x) + fz * (cz - z)) / d < 0.5) return null;
   return { x, z, d, face, seat: mySeat };
 }
-const _castFrom = new THREE.Vector3();
 /** Casts from where you are now, if still at the edge; the bobber lands a few steps out. */
 function castHere(minutes) {
   const s = fishSpot();
@@ -3368,9 +3403,7 @@ function castHere(minutes) {
   const { min, max } = pondBox;
   const tx = THREE.MathUtils.clamp(s.x + fx * (s.d + 3.5), min.x + 1.5, max.x - 1.5),
     tz = THREE.MathUtils.clamp(s.z + fz * (s.d + 3.5), min.z + 1.5, max.z - 1.5);
-  ray.set(_castFrom.set(tx, 200, tz), DOWN);
-  const hit = ray.intersectObjects([...waterMeshes], false)[0];
-  fishing.cast({ x: s.x, z: s.z, face: s.face, seat: s.seat, target: { x: tx, y: hit ? hit.point.y : pos.y, z: tz } }, minutes);
+  fishing.cast({ x: s.x, z: s.z, face: s.face, seat: s.seat, target: { x: tx, y: waterY(tx, tz) ?? pos.y, z: tz } }, minutes);
 }
 /** @param {number} id seat @returns {number} distance from you to that seat */
 const seatDistance = (id) => {
