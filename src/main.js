@@ -308,7 +308,7 @@ function prepareTown(fbx) {
         solidBoxes.push(new THREE.Box3().setFromObject(o));
     });
     placeLampPairs();
-    applyLook(dayAmount); // the pond pair's softer light
+    applyLook(currentLook); // the pond pair's softer light
     candles.position.y = groundHeight(candles.position.x, candles.position.z);
     candles.updateMatrixWorld(true);
     solidBoxes.push(new THREE.Box3().setFromObject(candles).expandByScalar(0.15)); // nobody steps on them: a very small gap around
@@ -661,23 +661,200 @@ function seatSpot(id) {
 
 // ---- Day / night ----
 // Only for you, like mute: it changes how you see the town, not the room.
-// Each entry is [night, day]; switching blends between them in about a second.
-const LOOK = {
-  background: ["#070a18", "#9fcdf2"],
-  skyTop: ["#3a4a8a", "#d6ecff"],
-  skyGround: ["#0b0f1a", "#5c6a44"],
-  skyIntensity: [0.35, 1.1],
-  sunColor: ["#7f95d8", "#fff1d8"],
-  sunIntensity: [0.45, 1.9],
-  lampIntensity: [150, 0], // lamps off by day
-  glowOpacity: [0.35, 0],
-  lantern: ["#ffdf7a", "#d8cfa8"], // unlit glass
-  waterColor: ["#0b2d63", "#2a6db3"],
-  waterEmissive: ["#020c22", "#06223f"],
-  waterSpecular: ["#7a6440", "#ffffff"],
+// Cycles through night, day, or a client-side automatic cycle (night -> dawn -> day -> golden hour -> dusk -> night).
+const NIGHT_SPEC = {
+  daylight: 0,
+  background: "#070a18",
+  skyTop: "#3a4a8a",
+  skyGround: "#0b0f1a",
+  skyIntensity: 0.35,
+  sunColor: "#7f95d8",
+  sunIntensity: 0.45,
+  sunPos: [40, 80, 30],
+  lampIntensity: 150,
+  glowOpacity: 0.35,
+  lantern: "#ffdf7a",
+  waterColor: "#0b2d63",
+  waterEmissive: "#020c22",
+  waterSpecular: "#7a6440",
 };
-for (const k in LOOK)
-  if (typeof LOOK[k][0] === "string") LOOK[k] = LOOK[k].map((c) => new THREE.Color(c));
+const DAY_SPEC = {
+  daylight: 1,
+  background: "#9fcdf2",
+  skyTop: "#d6ecff",
+  skyGround: "#5c6a44",
+  skyIntensity: 1.1,
+  sunColor: "#fff1d8",
+  sunIntensity: 1.9,
+  sunPos: [40, 80, 30],
+  lampIntensity: 0,
+  glowOpacity: 0,
+  lantern: "#d8cfa8",
+  waterColor: "#2a6db3",
+  waterEmissive: "#06223f",
+  waterSpecular: "#ffffff",
+};
+const MOONSET_SPEC = {
+  daylight: 0.08,
+  background: "#161938",
+  skyTop: "#9da5de",
+  skyGround: "#282b4a",
+  skyIntensity: 0.68,
+  sunColor: "#8b98cf",
+  sunIntensity: 0,
+  sunPos: [18, 72, 30],
+  lampIntensity: 145,
+  glowOpacity: 0.33,
+  lantern: "#ffdf7a",
+  waterColor: "#0e2f66",
+  waterEmissive: "#040d24",
+  waterSpecular: "#856d4c",
+};
+const TWILIGHT_SPEC = {
+  daylight: 0.1,
+  background: "#201c40",
+  skyTop: "#b59ee6",
+  skyGround: "#2c2445",
+  skyIntensity: 0.72,
+  sunColor: "#9c7eb8",
+  sunIntensity: 0,
+  sunPos: [-58, 42, 28],
+  lampIntensity: 145,
+  glowOpacity: 0.33,
+  lantern: "#ffdf7a",
+  waterColor: "#102f66",
+  waterEmissive: "#060e26",
+  waterSpecular: "#967450",
+};
+// Duplicate keyframes at p = 0.185 and p = 0.815 reposition the directional light while
+// sunIntensity === 0 so shadows never sweep backwards between moon and sun.
+const CYCLE_SPECS = [
+  { p: 0.0, ...NIGHT_SPEC },
+  { p: 0.15, ...NIGHT_SPEC, sunPos: [28, 78, 30] },
+  { p: 0.185, ...MOONSET_SPEC },
+  { p: 0.185, ...MOONSET_SPEC, sunPos: [58, 42, 28] },
+  {
+    p: 0.23,
+    daylight: 0.3,
+    background: "#5e4b73",
+    skyTop: "#a888b0",
+    skyGround: "#362b3d",
+    skyIntensity: 0.74,
+    sunColor: "#f2a494",
+    sunIntensity: 0.55,
+    sunPos: [56, 46, 28],
+    lampIntensity: 105,
+    glowOpacity: 0.24,
+    lantern: "#ffdf7a",
+    waterColor: "#1d427d",
+    waterEmissive: "#0c1633",
+    waterSpecular: "#c9927a",
+  },
+  {
+    p: 0.28,
+    daylight: 0.68,
+    background: "#f2bfa0",
+    skyTop: "#ffdec4",
+    skyGround: "#665848",
+    skyIntensity: 0.9,
+    sunColor: "#ffd099",
+    sunIntensity: 1.38,
+    sunPos: [50, 58, 28],
+    lampIntensity: 20,
+    glowOpacity: 0.05,
+    lantern: "#ebd7aa",
+    waterColor: "#28609e",
+    waterEmissive: "#0e1f38",
+    waterSpecular: "#ffe0bd",
+  },
+  { p: 0.35, ...DAY_SPEC },
+  { p: 0.65, ...DAY_SPEC, sunPos: [-15, 78, 30] },
+  {
+    p: 0.72,
+    daylight: 0.72,
+    background: "#f0a975",
+    skyTop: "#ffd099",
+    skyGround: "#664d3b",
+    skyIntensity: 0.92,
+    sunColor: "#ffb86b",
+    sunIntensity: 1.45,
+    sunPos: [-35, 58, 28],
+    lampIntensity: 35,
+    glowOpacity: 0.08,
+    lantern: "#f2d896",
+    waterColor: "#265794",
+    waterEmissive: "#121a30",
+    waterSpecular: "#ffd094",
+  },
+  {
+    p: 0.78,
+    daylight: 0.35,
+    background: "#c96862",
+    skyTop: "#e88a78",
+    skyGround: "#3b2434",
+    skyIntensity: 0.76,
+    sunColor: "#ff7e52",
+    sunIntensity: 0.72,
+    sunPos: [-52, 46, 28],
+    lampIntensity: 110,
+    glowOpacity: 0.25,
+    lantern: "#ffdf7a",
+    waterColor: "#1d386e",
+    waterEmissive: "#12122b",
+    waterSpecular: "#e89264",
+  },
+  { p: 0.815, ...TWILIGHT_SPEC },
+  { p: 0.815, ...TWILIGHT_SPEC, sunPos: [52, 74, 30] },
+  { p: 0.85, ...NIGHT_SPEC, sunPos: [52, 74, 30] },
+  { p: 1.0, ...NIGHT_SPEC },
+];
+const LOOK_COLORS = [
+  "background",
+  "skyTop",
+  "skyGround",
+  "sunColor",
+  "lantern",
+  "waterColor",
+  "waterEmissive",
+  "waterSpecular",
+];
+const LOOK_NUMS = ["daylight", "skyIntensity", "sunIntensity", "lampIntensity", "glowOpacity"];
+function makeLook(spec) {
+  const out = { p: spec.p ?? 0, sunPos: new THREE.Vector3(...spec.sunPos) };
+  for (const k of LOOK_COLORS) out[k] = new THREE.Color(spec[k]);
+  for (const k of LOOK_NUMS) out[k] = spec[k];
+  return out;
+}
+function copyLook(dst, src) {
+  dst.sunPos.copy(src.sunPos);
+  for (const k of LOOK_COLORS) dst[k].copy(src[k]);
+  for (const k of LOOK_NUMS) dst[k] = src[k];
+}
+function lerpLook(dst, a, b, t) {
+  dst.sunPos.copy(a.sunPos).lerp(b.sunPos, t);
+  for (const k of LOOK_COLORS) dst[k].copy(a[k]).lerp(b[k], t);
+  for (const k of LOOK_NUMS) dst[k] = a[k] + (b[k] - a[k]) * t;
+}
+const NIGHT_LOOK = makeLook(NIGHT_SPEC);
+const DAY_LOOK = makeLook(DAY_SPEC);
+const CYCLE = CYCLE_SPECS.map(makeLook);
+function sampleCycle(p, dst) {
+  const phase = ((p % 1) + 1) % 1;
+  for (let i = 0; i < CYCLE.length - 1; i++) {
+    const a = CYCLE[i],
+      b = CYCLE[i + 1];
+    if (b.p > a.p && phase >= a.p && phase <= b.p) {
+      lerpLook(dst, a, b, (phase - a.p) / (b.p - a.p));
+      return dst;
+    }
+  }
+  copyLook(dst, CYCLE[CYCLE.length - 1]);
+  return dst;
+}
+const currentLook = makeLook(NIGHT_SPEC);
+const fromLook = makeLook(NIGHT_SPEC);
+const targetLook = makeLook(NIGHT_SPEC);
+
 const lampLights = lampPosts.flatMap((p) => p.children.filter((c) => c.isPointLight));
 const lampGlows = lampPosts.flatMap((p) => p.children.filter((c) => c.isSprite));
 
@@ -759,14 +936,15 @@ let candleLight = 0; // steady strength; the flicker plays around it each frame
 candles.add(benchGlow);
 candles.position.set(0, 0, 23.6);
 scene.add(candles);
-const mixNum = ([a, b], t) => a + (b - a) * t;
-const mixColor = (target, [a, b], t) => target.copy(a).lerp(b, t);
 const OVERCAST_SKY = new THREE.Color("#7d8794");
 const OVERCAST_LIGHT = new THREE.Color("#a3adbb");
 let rainAmount = 0; // 0 = dry, 1 = full rain (eased in the loop)
-// t: 0 = night, 1 = day
-function applyLook(t) {
-  mixColor(scene.background, LOOK.background, t);
+let dayAmount = 0;
+function applyLook(look) {
+  const t = look.daylight;
+  dayAmount = t;
+  sun.position.copy(look.sunPos);
+  scene.background.copy(look.background);
   // overcast: by day the rain greys the sky; at night it only dims a little
   const overcast = rainAmount * t;
   scene.background.lerp(OVERCAST_SKY, 0.65 * overcast);
@@ -776,35 +954,98 @@ function applyLook(t) {
   const closed = Math.max(rainAmount, 1 - t);
   scene.fog.near = 50 - 12 * closed;
   scene.fog.far = 140 - 22 * closed;
-  mixColor(skyLight.color, LOOK.skyTop, t);
-  skyLight.color.lerp(OVERCAST_LIGHT, 0.5 * overcast);
-  mixColor(skyLight.groundColor, LOOK.skyGround, t);
+  skyLight.color.copy(look.skyTop).lerp(OVERCAST_LIGHT, 0.5 * overcast);
+  skyLight.groundColor.copy(look.skyGround);
   const gloom = 1 - (0.2 + 0.2 * t) * closed;
-  skyLight.intensity = mixNum(LOOK.skyIntensity, t) * gloom;
-  mixColor(sun.color, LOOK.sunColor, t);
-  sun.intensity = mixNum(LOOK.sunIntensity, t) * gloom;
-  for (const l of lampLights) l.intensity = mixNum(LOOK.lampIntensity, t) * (l.userData.dim ?? 1);
-  candleLight = mixNum(LOOK.lampIntensity, t) * 0.06;
-  for (const g of lampGlows) g.material.opacity = mixNum(LOOK.glowOpacity, t);
-  mixColor(lightMaterial.color, LOOK.lantern, t);
-  mixColor(waterMaterial.color, LOOK.waterColor, t);
-  mixColor(waterMaterial.emissive, LOOK.waterEmissive, t);
-  mixColor(waterMaterial.specular, LOOK.waterSpecular, t);
+  skyLight.intensity = look.skyIntensity * gloom;
+  sun.color.copy(look.sunColor);
+  sun.intensity = look.sunIntensity * gloom;
+  for (const l of lampLights) l.intensity = look.lampIntensity * (l.userData.dim ?? 1);
+  candleLight = look.lampIntensity * 0.06;
+  for (const g of lampGlows) g.material.opacity = look.glowOpacity;
+  lightMaterial.color.copy(look.lantern);
+  waterMaterial.color.copy(look.waterColor);
+  waterMaterial.emissive.copy(look.waterEmissive);
+  waterMaterial.specular.copy(look.waterSpecular);
 }
-let isDay = false;
-try { isDay = localStorage.getItem("time-of-day") === "day"; } catch {}
-let dayAmount = isDay ? 1 : 0; // eased toward isDay in the loop
-applyLook(dayAmount);
+
+const TIME_MODES = ["night", "day", "auto"];
+const DEFAULT_CYCLE_MS = 10 * 60 * 1000;
+let cycleDurationMs = DEFAULT_CYCLE_MS;
+const lookBlendSec = () => Math.min(1, Math.max(0.25, (cycleDurationMs / 1000) * 0.05));
+const AUTO_START_PHASE = 0.63; // late day so switching from day -> auto starts smoothly before golden hour
+let timeMode = "night";
+try {
+  const savedMode = localStorage.getItem("time-of-day");
+  if (TIME_MODES.includes(savedMode)) timeMode = savedMode;
+} catch {}
+let cycleEpoch = Date.now() - AUTO_START_PHASE * cycleDurationMs;
+try {
+  const raw = localStorage.getItem("time-of-day-epoch");
+  const savedEpoch = raw === null || raw === "" ? NaN : Number(raw);
+  if (Number.isFinite(savedEpoch)) cycleEpoch = savedEpoch;
+} catch {}
+let lookBlend = 1;
+const cyclePhase = () => (((Date.now() - cycleEpoch) / cycleDurationMs) % 1 + 1) % 1;
+function setCycleDuration(ms) {
+  const p = cyclePhase();
+  cycleDurationMs = ms;
+  cycleEpoch = Date.now() - p * cycleDurationMs;
+  if (timeMode === "auto") {
+    try { localStorage.setItem("time-of-day-epoch", String(cycleEpoch)); } catch {}
+  }
+}
+function fillTargetLook() {
+  if (timeMode === "night") copyLook(targetLook, NIGHT_LOOK);
+  else if (timeMode === "day") copyLook(targetLook, DAY_LOOK);
+  else sampleCycle(cyclePhase(), targetLook);
+}
+fillTargetLook();
+copyLook(currentLook, targetLook);
+applyLook(currentLook);
+
 const dayNightBtn = document.querySelector("#day-night");
+const DAY_NIGHT_META = {
+  night: {
+    label: "make it day",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>',
+  },
+  day: {
+    label: "auto cycle",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  },
+  auto: {
+    label: "make it night",
+    icon: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/><circle cx="12" cy="12" r="2.5"/></svg>',
+  },
+};
 function drawDayNight() {
-  const label = isDay ? "make it night" : "make it day";
-  dayNightBtn.innerHTML = isDay ? '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>' : '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+  const { label, icon } = DAY_NIGHT_META[timeMode];
+  dayNightBtn.innerHTML = icon;
+  dayNightBtn.classList.toggle("on", timeMode === "auto");
   dayNightBtn.setAttribute("aria-label", label);
 }
 function toggleDayNight() {
-  isDay = !isDay;
-  try { localStorage.setItem("time-of-day", isDay ? "day" : "night"); } catch {}
+  copyLook(fromLook, currentLook);
+  lookBlend = 0;
+  timeMode = TIME_MODES[(TIME_MODES.indexOf(timeMode) + 1) % TIME_MODES.length];
+  if (timeMode === "auto") {
+    cycleEpoch = Date.now() - AUTO_START_PHASE * cycleDurationMs;
+    try { localStorage.setItem("time-of-day-epoch", String(cycleEpoch)); } catch {}
+  }
+  try { localStorage.setItem("time-of-day", timeMode); } catch {}
   drawDayNight();
+}
+function updateTimeOfDay(dt) {
+  if (timeMode !== "auto" && lookBlend >= 1) return;
+  fillTargetLook();
+  if (lookBlend < 1) {
+    lookBlend = Math.min(1, lookBlend + dt / lookBlendSec());
+    lerpLook(currentLook, fromLook, targetLook, lookBlend);
+  } else {
+    copyLook(currentLook, targetLook);
+  }
+  applyLook(currentLook);
 }
 drawDayNight();
 dayNightBtn.addEventListener("click", (e) => {
@@ -813,8 +1054,23 @@ dayNightBtn.addEventListener("click", (e) => {
 });
 addEventListener("keydown", (e) => {
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
-  if (!typing && !e.repeat && e.key.toLowerCase() === "n") toggleDayNight();
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "n") toggleDayNight();
 });
+
+let updateCycleDebug = () => {};
+if (import.meta.env.DEV) {
+  import("./cycle-debug.js").then(({ setupCycleDebug }) => {
+    updateCycleDebug = setupCycleDebug({
+      getTimeMode: () => timeMode,
+      getCyclePhase: cyclePhase,
+      getCycleDurationMs: () => cycleDurationMs,
+      setCycleDuration,
+      getLook: () => currentLook,
+      getRainAmount: () => rainAmount,
+      getLampIntensity: () => lampLights[0]?.intensity ?? 0,
+    });
+  });
+}
 
 // Rain: thin streaks in a box that follows the player, splashes where they land (rings on the
 // pond), shiny wet ground and a little fog.
@@ -823,7 +1079,7 @@ let isRaining = false;
 try { isRaining = localStorage.getItem("weather") === "rain"; } catch {}
 if (isRaining) {
   rainAmount = 1;
-  applyLook(dayAmount); // first frame already overcast
+  applyLook(currentLook); // first frame already overcast
 }
 const RAIN = { count: MOBILE ? 600 : 1800, radius: 40, height: 40, fall: 38, wind: 5 };
 const rainDrops = new Float32Array(RAIN.count * 3); // x, y, z of each drop's head
@@ -978,18 +1234,20 @@ function applyWet() {
   }
 }
 
+const RAIN_NIGHT = new THREE.Color("#b9c8e0");
+const RAIN_DAY = new THREE.Color("#e8eef6");
 function updateRain(dt) {
   const target = isRaining ? 1 : 0;
   if (rainAmount !== target) {
     rainAmount += Math.sign(target - rainAmount) * Math.min(dt * 0.7, Math.abs(target - rainAmount));
-    applyLook(dayAmount);
+    applyLook(currentLook);
     applyWet();
   }
   if (isRaining) prepareWet();
   rainMesh.visible = splashMesh.visible = rainAmount > 0;
   if (!rainMesh.visible) return;
   rainUniforms.uOpacity.value = 0.45 * rainAmount;
-  rainUniforms.uColor.value.set(dayAmount > 0.5 ? "#e8eef6" : "#b9c8e0");
+  rainUniforms.uColor.value.copy(RAIN_NIGHT).lerp(RAIN_DAY, dayAmount);
   surfaceBudget = 40;
   const { radius, height, fall, wind } = RAIN;
   const top = pos.y + height;
@@ -1113,7 +1371,7 @@ function placeFireflies() {
   firefliesPlaced = true;
 }
 function updateFireflies() {
-  const opacity = (1 - dayAmount) * (1 - rainAmount);
+  const opacity = THREE.MathUtils.clamp(1 - dayAmount * 2, 0, 1) * (1 - rainAmount);
   fireflyMesh.visible = firefliesPlaced && opacity > 0.01;
   if (!fireflyMesh.visible) return;
   const t = waterUniforms.uTime.value;
@@ -3207,11 +3465,8 @@ function loop() {
     f.visible = candleLight > 0.01;
     f.scale.y = 1 + 0.25 * Math.sin(waterUniforms.uTime.value * (11 + i * 3) + i);
   });
-  const dayTarget = isDay ? 1 : 0;
-  if (dayAmount !== dayTarget) {
-    dayAmount += Math.sign(dayTarget - dayAmount) * Math.min(dt, Math.abs(dayTarget - dayAmount));
-    applyLook(dayAmount);
-  }
+  updateTimeOfDay(dt);
+  updateCycleDebug();
   updateRain(dt);
   stones.update(dt);
   updateFireflies();
