@@ -5,6 +5,7 @@
 //                     { t: "color", color }   (name colour: one of NAME_COLORS)
 //                     { t: "sit", seat, n }   (bench seat 0..15 or -1 to stand; n numbers the request)
 //                     { t: "capy" }   (feed the capybara)
+//                     { t: "ground", on }   (sit on the ground, or get up)
 //                     { t: "radio", idx, password }   (admin)
 //                     { t: "auth", password, quiet }   (admin login: admin-ok or an error; quiet = on reconnect, no admin-ok)
 //                     { t: "who", id, password }   (admin: who is this player)
@@ -15,6 +16,7 @@
 //                     { t: "joined", player } | { t: "left", id } | { t: "pos", ... }
 //                     { t: "chat", id, name, color, text, at } | { t: "name", id, name } | { t: "color", id, color }
 //                     { t: "gender", id, gender, cap } | { t: "radio", command } | { t: "error", msg }
+//                     { t: "ground", id, on }   (that player sat on the ground or got up)
 //                     { t: "hold", item }   (what you hold: 0 nothing, 1 laptop, 2 coffee, 3 book; the client decides when it shows)
 //                     { t: "seat", id, seat, n }   (who sits where; n only on a correction to the sender)
 //                     { t: "capy", at, until, lost, phrase }   (the capybara was fed: it sits from at to until, room clock;
@@ -518,7 +520,7 @@ export class Room {
 
   // only each player's public fields (never the IP)
   public(p) {
-    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap ?? -1, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, admin: !!p.admin };
+    return { id: p.id, name: p.name, gender: p.gender, color: p.color || "", cap: p.cap ?? -1, x: p.x, z: p.z, dir: p.dir, step: p.step, seat: p.seat ?? -1, hold: p.hold | 0, ground: !!p.ground, admin: !!p.admin };
   }
   players() {
     return this.openSockets()
@@ -632,6 +634,11 @@ export class Room {
       const fed = { at: now, until: now + CAPY_SIT_MS, lost: c.lost + (c.until - c.at) };
       await this.state.storage.put("capy", fed);
       this.broadcast({ t: "capy", ...fed, phrase: Math.floor(Math.random() * 1000) });
+    } else if (m.t === "ground") {
+      // kept on the player, so whoever joins later sees them sitting there
+      p.ground = m.on === true;
+      ws.serializeAttachment(p);
+      this.broadcast({ t: "ground", id: p.id, on: p.ground }, ws);
     } else if (m.t === "hold") {
       // what the player holds; the client draws it on someone seated, and the coffee also on someone standing still
       p.hold = [1, 2, 3].includes(m.item) ? m.item : 0;

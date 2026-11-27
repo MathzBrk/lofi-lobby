@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Sit on the ground**: press **C** (or the sitting button in the top card) to sit down wherever you are, facing the way you stand: front, back, left or right. Everyone sees it, also whoever joins later; walking, sitting on a bench or C again gets you up. The sitting frames are drawn in code from each trainer's own standing frames (with its cap colour), so there are no new assets.
 - **Mentions in the chat**: type **@** and pick a name from the list of players in the room (arrows, Tab or Enter). Everyone sees the message as usual, but for the player it names it is highlighted: a gold bar and tint in the chat and a gold-edged bubble over the sender. The @name is shown in that player's name colour for everyone. Names are matched without telling upper from lower case and only as a whole name ("@Ana" doesn't mention "Anabel").
 - A small GitHub link beside the chat: the game is open source, come and contribute.
 - **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
