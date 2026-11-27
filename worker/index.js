@@ -866,9 +866,12 @@ export class Room {
     return p.prs;
   }
   // { login: merged pull requests }, from storage; read again from GitHub in the background when it gets old
+  // or after a deploy
   async contributors() {
     const saved = (await this.state.storage.get("contributors")) || { counts: {}, at: 0 };
-    if (Date.now() - saved.at > GH_COUNTS_FRESH_MS && Date.now() - this.ghTriedAt > GH_RETRY_MS) this.state.waitUntil(this.readContributors().catch(() => {}));
+    // old, or counted by another deploy: a deploy often follows a merge, so the first read after one is fresh
+    const stale = Date.now() - saved.at > GH_COUNTS_FRESH_MS || (saved.v || "") !== (this.env.VERSION?.id || "");
+    if (stale && Date.now() - this.ghTriedAt > GH_RETRY_MS) this.state.waitUntil(this.readContributors().catch(() => {}));
     return saved.counts;
   }
   // Counts the merged pull requests of GITHUB_REPO per author. With a player's token on a login, without one
@@ -889,7 +892,7 @@ export class Room {
       }
       if (list.length < 100) break;
     }
-    await this.state.storage.put("contributors", { counts, at: Date.now() });
+    await this.state.storage.put("contributors", { counts, at: Date.now(), v: this.env.VERSION?.id || "" });
     // players already in the room get their new count
     for (const ws of this.openSockets()) {
       const p = ws.deserializeAttachment();
