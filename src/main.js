@@ -1133,6 +1133,47 @@ addEventListener("keydown", (e) => {
   if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "n") toggleDayNight();
 });
 
+// ---- Frames per second ----
+// Beside the player count, for whoever wants to see how the game runs on their machine: P (or a tap on
+// the count, on phones) shows or hides it, and it is remembered. Counted over half a second; the title
+// adds the slowest frame of that half second and the draw calls of the last frame.
+const elFps = document.querySelector("#fps");
+const FPS_EVERY_MS = 500;
+const fpsCount = { frames: 0, since: performance.now(), last: performance.now(), worst: 0 };
+let fpsOn = false;
+try { fpsOn = localStorage.getItem("fps") === "1"; } catch {}
+elFps.hidden = !fpsOn;
+function setFps(on) {
+  fpsOn = on;
+  elFps.hidden = !on;
+  try { localStorage.setItem("fps", on ? "1" : "0"); } catch {}
+  Object.assign(fpsCount, { frames: 0, since: performance.now(), last: performance.now(), worst: 0 });
+  if (on) elFps.textContent = "… fps";
+}
+function countFrame() {
+  if (!fpsOn) return;
+  const now = performance.now();
+  const frame = now - fpsCount.last;
+  fpsCount.last = now;
+  // back from a hidden tab (no frames meanwhile): start the count again
+  if (frame > 1000) return void Object.assign(fpsCount, { frames: 0, since: now, worst: 0 });
+  fpsCount.frames++;
+  fpsCount.worst = Math.max(fpsCount.worst, frame);
+  const span = now - fpsCount.since;
+  if (span < FPS_EVERY_MS) return;
+  const fps = Math.round((fpsCount.frames * 1000) / span);
+  elFps.textContent = `${fps} fps`;
+  elFps.classList.toggle("slow", fps < 45 && fps >= 25);
+  elFps.classList.toggle("bad", fps < 25);
+  elFps.title = `${(span / fpsCount.frames).toFixed(1)} ms a frame, slowest ${fpsCount.worst.toFixed(1)} ms · ${renderer.info.render.calls} draw calls`;
+  Object.assign(fpsCount, { frames: 0, since: now, worst: 0 });
+}
+document.querySelector("#online").addEventListener("click", () => setFps(!fpsOn));
+addEventListener("keydown", (e) => {
+  const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName) || document.activeElement?.isContentEditable;
+  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "p") setFps(!fpsOn);
+});
+
 
 // Rain: thin streaks in a box that follows the player, splashes where they land (rings on the
 // pond), shiny wet ground and a little fog.
@@ -3220,7 +3261,7 @@ function removeOther(id) {
   updateCount();
 }
 function updateCount() {
-  const el = document.querySelector("#place small");
+  const el = document.querySelector("#online");
   if (el)
     el.textContent = `${others.size + 1} online`;
 }
@@ -4255,6 +4296,7 @@ if (import.meta.env.DEV) {
 function loop() {
   const now = performance.now();
   const dt = Math.min(clock.getDelta(), 0.05);
+  countFrame();
   checkSavedPosition();
   savePosition(performance.now());
   waterUniforms.uTime.value += dt;
