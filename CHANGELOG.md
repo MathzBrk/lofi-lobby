@@ -51,6 +51,7 @@
 - A single room, `lobby`: `?room=` is gone and the server refuses other room names, so nobody can open extra rooms to run up the bill.
 
 ### Fixed
+- **Stones thrown while your tab was hidden** no longer all fly at once when you come back: a stone someone throws while you are on another tab is skipped.
 - A player whose cap colour is not known shows the cap their trainer is drawn with (red for the male, white for the female) instead of always red.
 - The chat button is back on phones (a desktop-only rule was hiding it there too).
 - Name tags, chat bubbles and the sit and wall prompts no longer show over the chat and the other panels.
