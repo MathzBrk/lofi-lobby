@@ -3,6 +3,7 @@ import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
 import { createBoard, setupWall } from "./board.js";
 import { createStones } from "./stones.js";
+import { addSitFrames, sitFramePos } from "./ground-sit.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
 import { createFishing, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
 
@@ -1488,6 +1489,13 @@ addEventListener("keydown", (e) => {
 // (4 directions x 4 steps, 32px frames, 2px gap).
 // male: green cap, orange jacket, purple backpack.
 // female: coral beanie, long hair, teal coat, skirt, yellow bag.
+// a trainer's sheet with its sitting-on-the-ground frames drawn under it (src/ground-sit.js); the row's
+// place rides on the canvas
+function withSitFrames(cv, cfg) {
+  const { canvas, row } = addSitFrames(cv, cfg, framePos);
+  canvas.sitRow = row;
+  return canvas;
+}
 function generateOriginalTrainer(gender = "male", cap = null) {
   const fem = gender === "female";
   const {
@@ -1592,7 +1600,7 @@ function generateOriginalTrainer(gender = "male", cap = null) {
       }
     }
   });
-  return cv;
+  return withSitFrames(cv, GRID);
 }
 // Lit "billboard" plane: receives lamp light and casts a shadow
 // with the sprite's cutout (alphaTest on the depth materials too).
@@ -1657,7 +1665,10 @@ function removeBackground(t, cfg = CHARACTER.cfg, gender = GENDER, cap = myCap()
   }
   recolorCap(d.data, cv.width, gender, cap);
   ctx.putImageData(d, 0, 0);
-  t.image = cv;
+  // the sitting row makes the image taller, and a texture already on the GPU can't change size:
+  // dispose of it so the next frame uploads a new one with the new image
+  t.dispose();
+  t.image = withSitFrames(cv, cfg);
   t.needsUpdate = true;
 }
 
@@ -1835,7 +1846,7 @@ let mySeat = -1;
 // in your hand while you stand still (it goes away while you walk). Pixel art drawn
 // in code on the trainer's own 32px frame, on a plane that sits exactly over the trainer and takes
 // the same depth (its feet), so it is covered and uncovered together with the body.
-const HELD = ["nothing", "a laptop", "a coffee", "a book"];
+const HELD = ["nothing", "a laptop", "a coffee", "a book", "a cigarette"];
 // each view: [colour, x, y, w, h, glows, puff, only] rectangles on the 32x32 frame, drawn for a body
 // whose middle is on column 16 (front and back views) or whose front edge is on column 22 (side view,
 // looking right); bodyShape() measures the real sprite and the art moves to fit it.
@@ -1864,6 +1875,15 @@ const HELD_ART = {
     ["skin", 22, 27, 2, 1], ["#f4ead2", 24, 23, 1, 2, 0, undefined, 1], ["#f4ead2", 25, 22, 1, 1, 0, undefined, 1]],
   // from behind the body hides it: only the cover's corners show past the elbows
   "3up": [["#7a2430", 8, 25, 1, 2], ["#7a2430", 24, 25, 1, 2]],
+  // cigarette from the front: between the fingers of the hand at the side, the ember glowing at its
+  // tip (brighter on one frame, a drag) and a thin trail of smoke rising and swaying past the shoulder
+  "4down": [["skin", 21, 24, 2, 2], ["#f4f1ea", 23, 24, 3, 1], ["#d9a35b", 22, 24, 1, 1], ["#ff6a2a", 26, 24, 1, 1, 1],
+    ["#ffd36b", 26, 24, 1, 1, 1, undefined, 1], ["#b8b8c6", 26, 22, 1, 1, 1, 0], ["#9c9cac", 26, 22, 1, 1, 1, 2]],
+  // from the side: the hand in front of the chest, below the chin, a short cigarette pointing forward
+  "4right": [["skin", 22, 25, 1, 1], ["#f4f1ea", 23, 25, 1, 1], ["#ff6a2a", 24, 25, 1, 1, 1],
+    ["#ffd36b", 24, 25, 1, 1, 1, undefined, 1], ["#b8b8c6", 24, 23, 1, 1, 1, 0], ["#9c9cac", 24, 23, 1, 1, 1, 2]],
+  // from behind the body hides it: only the ember past the elbow and the smoke above it
+  "4up": [["#ff6a2a", 24, 24, 1, 1, 1], ["#b8b8c6", 24, 22, 1, 1, 1, 0], ["#9c9cac", 24, 22, 1, 1, 1, 2]],
 };
 const FACE_LIGHT = [0.34, 0.22, 0.4, 0.28]; // how strong the screen's light is on each frame
 const FLICKER = [0, 1, 0, 2, 3, 1, 2, 0]; // uneven, like a screen changing
@@ -1908,9 +1928,9 @@ function bodyShape(tex, cfg, d) {
 }
 const heldTex = {};
 function heldTextures(item, d, shape) {
-  const tick = Math.floor(performance.now() / (item === 1 ? 260 : item === 2 ? 320 : 400));
-  // the screen's light, steam rising, or a page turning about every 4 seconds
-  const frame = item === 1 ? FLICKER[tick % 8] : item === 2 ? tick % 4 : +(tick % 10 === 9);
+  const tick = Math.floor(performance.now() / (item === 1 ? 260 : item === 2 ? 320 : item === 4 ? 420 : 400));
+  // the screen's light, steam or smoke rising, or a page turning about every 4 seconds
+  const frame = item === 1 ? FLICKER[tick % 8] : item === 2 || item === 4 ? tick % 4 : +(tick % 10 === 9);
   const key = item + d + frame + (shape?.key || "");
   if (heldTex[key]) return heldTex[key];
   const art = HELD_ART[item + (d === "left" ? "right" : d)] || HELD_ART[item + "down"];
@@ -1954,9 +1974,10 @@ function createHeld(feet) {
   return mesh;
 }
 // which way the item is drawn for a trainer, or null when it doesn't show: anything on a bench,
-// and the coffee while standing still
+// and the coffee or the cigarette while standing still
 const COFFEE = 2;
-const heldDir = (item, seat, still, d) => (!item ? null : seat ? seat.dir : item === COFFEE && still ? d : null);
+const ON_FOOT = [COFFEE, 4]; // what stays in your hand on your feet
+const heldDir = (item, seat, still, d) => (!item ? null : seat ? seat.dir : ON_FOOT.includes(item) && still ? d : null);
 // put the item over its trainer, seen from direction d (or hide it: d is null)
 function showHeld(mesh, body, cfg, item, d) {
   mesh.visible = !!(item && d);
@@ -1969,7 +1990,7 @@ function showHeld(mesh, body, cfg, item, d) {
 }
 const myHeld = createHeld(myFeet);
 let myHold = 0;
-try { myHold = [1, 2, 3].includes(+localStorage.getItem("hold")) ? +localStorage.getItem("hold") : 0; } catch {}
+try { myHold = [1, 2, 3, 4].includes(+localStorage.getItem("hold")) ? +localStorage.getItem("hold") : 0; } catch {}
 const sendHold = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "hold", item: myHold }));
 const holdBtn = document.querySelector("#hold");
 // the button shows what you hold (the cup, unlit, when your hands are empty)
@@ -1979,12 +2000,18 @@ const HELD_ICONS = [
   '<path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/>',
   CUP_ICON,
   '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  '<path d="M17 12H3a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h14"/><path d="M18 8c0-2.5-2-2.5-2-5"/><path d="M21 16a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M22 8c0-2.5-2-2.5-2-5"/><path d="M7 12v4"/>',
 ];
 let holdIcon = 0;
-// Q on a bench goes through everything; standing, it only picks the coffee up and puts it away
-const nextHold = () => (mySeat >= 0 ? (myHold + 1) % HELD.length : myHold === COFFEE ? 0 : COFFEE);
+// Q on a bench goes through everything; standing, it goes coffee, cigarette, empty hands
+const FOOT_CYCLE = [0, ...ON_FOOT];
+function nextHold() {
+  if (mySeat >= 0) return (myHold + 1) % HELD.length;
+  const i = FOOT_CYCLE.indexOf(myHold);
+  return i < 0 ? COFFEE : FOOT_CYCLE[(i + 1) % FOOT_CYCLE.length]; // a laptop or a book in hand gives way to the coffee
+}
 function updateHoldButton() {
-  const shown = mySeat >= 0 || myHold === COFFEE ? myHold : 0; // a laptop or a book waits for a bench
+  const shown = mySeat >= 0 || ON_FOOT.includes(myHold) ? myHold : 0; // a laptop or a book waits for a bench
   holdBtn.hidden = false;
   holdBtn.classList.toggle("on", shown > 0);
   holdBtn.setAttribute("aria-label", "hold " + HELD[nextHold()]);
@@ -2002,6 +2029,42 @@ function cycleHold() {
 holdBtn.addEventListener("click", (e) => {
   cycleHold();
   e.currentTarget.blur(); // give the keyboard back to the game
+});
+
+// ---- Sitting on the ground (C, or the button in the top card) ----
+// You sit down facing the way you stand; everyone sees it, also whoever joins later. Walking, sitting on
+// a bench or pressing C again gets you up.
+let onGround = false,
+  lastGround = 0;
+const sendGround = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "ground", on: onGround }));
+const groundBtn = document.querySelector("#ground-sit");
+function setGround(on) {
+  const now = performance.now();
+  if (on && (gamePaused || mySeat >= 0 || now - lastGround < 350)) return; // stays under the server's rate limit
+  if (on === onGround) return;
+  lastGround = now;
+  onGround = on;
+  groundBtn.classList.toggle("on", on);
+  groundBtn.setAttribute("aria-label", on ? "stand up" : "sit on the ground");
+  sendGround();
+}
+// the sitting frame facing `d` (false if this texture has none yet)
+function setSitFrameTex(tex, d) {
+  const img = tex.image,
+    row = img?.sitRow;
+  if (!row) return false;
+  const { x, y, w, h } = sitFramePos(row, d);
+  tex.repeat.set(w / img.width, h / img.height);
+  tex.offset.set(x / img.width, 1 - (y + h) / img.height);
+  return true;
+}
+groundBtn.addEventListener("click", (e) => {
+  setGround(!onGround);
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+addEventListener("keydown", (e) => {
+  if (typing() || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key.toLowerCase() === "c") setGround(!onGround);
 });
 
 // each sit/stand is numbered and the server's corrections carry the number back, so a late
@@ -2022,6 +2085,7 @@ function nearestFreeSeat() {
 function sit(id) {
   const s = seatSpot(id);
   if (!s) return;
+  setGround(false);
   mySeat = id;
   const [ox, oz] = [pos.x, pos.z];
   pos.set(s.x, s.y, s.z);
@@ -2241,6 +2305,7 @@ function createOther(p) {
         () => {
           failedSheets.add(g);
           o.cfg = GRID;
+          tex.dispose(); // a different size from the sheet: a new texture on the GPU
           tex.image = generateOriginalTrainer(g, cap);
           tex.needsUpdate = true;
         },
@@ -2278,6 +2343,7 @@ function createOther(p) {
     step: p.step || 0,
     seat: Number.isInteger(p.seat) ? p.seat : -1,
     hold: p.hold | 0,
+    ground: !!p.ground, // on joining: someone already sitting on the ground
     name: p.name,
     gender: g,
     color: p.color,
@@ -2322,6 +2388,7 @@ function connect() {
     sock.send(JSON.stringify({ t: "hello", v: 1, name: NAME, gender: GENDER, color: COLOR, cap: myCap(), x: pos.x, z: pos.z, dir }));
     if (mySeat >= 0) sendSeat(); // reconnected while sitting
     if (myHold) sendHold();
+    if (onGround) sendGround(); // reconnected while sitting on the ground
     // a saved admin logs in again quietly, so everyone sees the admin badge
     let password = "";
     try { password = localStorage.getItem("admin-password") || ""; } catch {}
@@ -2412,6 +2479,9 @@ function connect() {
     } else if (m.t === "hold") {
       const o = others.get(m.id);
       if (o) o.hold = m.item | 0;
+    } else if (m.t === "ground") {
+      const o = others.get(m.id);
+      if (o) o.ground = !!m.on;
     } else if (m.t === "seat") {
       // the server says who sits where. About you, it only answers a refused or dropped sit:
       // you're not on the seat you asked for, so stand up; or the room still has you seated
@@ -2508,12 +2578,15 @@ function updateOthers(dt) {
     m.rotation.copy(sprite.rotation);
     // running uses the run frames of the same sheet, like your own trainer (not on the code-drawn fallback)
     const running = o.run && !seat && o.cfg === CROP[o.gender];
-    setFrameTex(o.tex, running ? RUN_CROP[o.gender] : o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
+    // on the ground, facing the way they stood (walking or a bench gets them up)
+    if (o.ground && (seat || o.step)) o.ground = false;
+    const grounded = o.ground && setSitFrameTex(o.tex, o.dir);
+    if (!grounded) setFrameTex(o.tex, running ? RUN_CROP[o.gender] : o.cfg, seat ? seat.dir : o.dir, seat ? 0 : o.step);
     m.userData.lift = running && o.gender === "male" ? 0.8 : 0; // the male run frames sit higher in their cell
     m.position.y -= m.userData.lift;
     // standing still: on the standing frame, a moment after the last step arrived
     const still = !o.step && performance.now() - (o.movedAt || 0) > 300;
-    const hd = heldDir(o.hold, seat, still, o.dir);
+    const hd = grounded ? null : heldDir(o.hold, seat, still, o.dir); // the coffee is drawn for a standing body
     if (o.held || hd) showHeld((o.held ??= createHeld(o.feet)), m, o.cfg, o.hold, hd);
   }
 }
@@ -3185,8 +3258,11 @@ function loop() {
   } else tAnim = 0;
   const currentStep = walking ? Math.floor(tAnim) % CHARACTER.steps : 0;
   const running = Boolean(walking && run);
-  setFrame(dir, currentStep, running);
-  sendPosition(performance.now(), currentStep, running);
+  const now = performance.now();
+  if (onGround && walking) setGround(false); // moving gets you up
+  const grounded = onGround && setSitFrameTex(sheetTex, dir); // facing the way you stood
+  if (!grounded) setFrame(dir, currentStep, running);
+  sendPosition(now, currentStep, running);
   const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
   eNow = eAction(freeSeat);
   updateHoldButton();
@@ -3212,7 +3288,7 @@ function loop() {
   updateOcclusion();
   // facing the camera, tilted only halfway (the shadow looks like a standing body)
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
-  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, heldDir(myHold, mySeat >= 0 ? seatSpot(mySeat) : null, !walking, dir));
+  showHeld(myHeld, sprite, CHARACTER.cfg, myHold, grounded ? null : heldDir(myHold, mySeat >= 0 ? seatSpot(mySeat) : null, !walking, dir));
 
   updateLampShadows([sprite, capy.mesh, ...[...others.values()].map((o) => o.mesh)]);
   renderer.render(scene, camera);
