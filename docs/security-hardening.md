@@ -4,6 +4,13 @@ Este documento registra a análise técnica de segurança do **Lofi Lobby** (`wo
 
 > **Status do Item 1 (Pré-`hello` / Ghost Players):** **Corrigido.** A máquina de estados do handshake WebSocket (`!p.joinedAt && m.t !== "hello"`), a remoção do fallback `createOther(m)` no handler `pos` em `src/main.js` e a expiração de sockets pré-`hello` via `HELLO_TIMEOUT_MS` (15 s) no `alarm()` já foram aplicadas e documentadas no [ADR 006](adr/006-reliable-disconnect-and-stale-socket-cleanup.md).
 
+## Regra de Documentação (ADR obrigatório)
+
+Para **cada solução implementada** a partir deste guia, o desenvolvedor deve:
+1. **Gerar um ADR correspondente em `docs/adr/`** (seguindo a numeração sequencial e o padrão dos arquivos `docs/adr/001`–`006`, com *Context*, *Decision*, *Alternatives considered* e *Consequences*).
+2. **Referenciar o novo ADR** na tabela *Architecture* do [README.md](../README.md), mantendo as linhas de ADR em **ordem crescente de numeração** (`ADR 001`, `002`, `003`, ..., antes de referências não-ADR como `SECURITY.md`).
+3. **Atualizar o [SECURITY.md](../SECURITY.md)** (caso altere limites, controles ou garantias públicas) e marcar o item correspondente como concluído neste documento.
+
 ---
 
 ## Resumo Executivo e Roadmap de Priorização
