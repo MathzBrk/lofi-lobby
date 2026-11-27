@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
 import { createBoard, setupWall } from "./board.js";
+import { createStones } from "./stones.js";
 import { addSitFrames, sitFramePos } from "./ground-sit.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
 import { createFishing, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
@@ -2425,6 +2426,7 @@ function connect() {
     else if (m.t === "note-del") wall.onNoteDeleted(m.id, m.total);
     else if (m.t === "note-like") wall.onNoteLiked(m.id, m.likes);
     else if (m.t === "capy") capyWasFed(m);
+    else if (m.t === "stone") stoneThrown(m);
     else if (m.t === "error" || m.t === "notice") addToHistory("system", m.msg);
     else if (m.t === "rename") {
       // the server refused our name and gave us another one
@@ -2979,6 +2981,87 @@ function updateCapy() {
   capyPrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
   capyPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
 }
+// ---- Skipping stones (T by the pond) ----
+// You plan the throw (where the stone touches the water), see it at once, and the room sends it to
+// everyone; others animate the same path from your hand (src/stones.js).
+const stones = createStones(scene, { surfaceY: (x, z) => topHeight(x, z), camera });
+const STONE_NEAR = 4.5; // how close to the pond you must be
+const STONE_EVERY_MS = 1200;
+let lastStone = 0;
+const handOf = (p) => ({ x: p.x, y: p.y + 2.0, z: p.z });
+// distance from (x, z) to the pond, 0 inside it
+function pondDistance(x, z) {
+  if (!pondBox) return Infinity;
+  const dx = Math.max(pondBox.min.x - x, 0, x - pondBox.max.x),
+    dz = Math.max(pondBox.min.z - z, 0, z - pondBox.max.z);
+  return Math.hypot(dx, dz);
+}
+const nearPond = () => !gamePaused && pondDistance(pos.x, pos.z) < STONE_NEAR;
+// Toward the middle of the pond: the first touch a little past the water's edge, then up to four
+// skips, each shorter, bending a little, while they stay on the water. The last touch is where it sinks.
+function planThrow(x, z) {
+  const c = pondBox.getCenter(new THREE.Vector3());
+  let dx = c.x - x,
+    dz = c.z - z;
+  const n = Math.hypot(dx, dz) || 1;
+  (dx /= n), (dz /= n);
+  let ex = NaN,
+    ez = NaN;
+  for (let d = 0.5; d < 40; d += 0.5)
+    if (isWater(x + dx * d, z + dz * d) && isWater(x + dx * (d + 2), z + dz * (d + 2))) {
+      (ex = x + dx * (d + 2)), (ez = z + dz * (d + 2));
+      break;
+    }
+  if (Number.isNaN(ex)) return null;
+  const touches = [[ex, ez]];
+  const skips = 1 + Math.floor(Math.random() * 4);
+  let ang = Math.atan2(dz, dx);
+  for (const len of [2.4, 1.9, 1.4, 1.0].slice(0, skips)) {
+    ang += (Math.random() - 0.5) * 0.3;
+    const [px, pz] = touches.at(-1);
+    const nx = px + Math.cos(ang) * len,
+      nz = pz + Math.sin(ang) * len;
+    if (!isWater(nx, nz)) break; // the next hop would land on the bank: it sinks where it is
+    touches.push([nx, nz]);
+  }
+  return { touches: touches.map(([a, b]) => [Math.round(a * 100) / 100, Math.round(b * 100) / 100]), dx, dz };
+}
+function throwStone() {
+  const now = performance.now();
+  if (!nearPond() || mySeat >= 0 || now - lastStone < STONE_EVERY_MS) return;
+  const plan = planThrow(pos.x, pos.z);
+  if (!plan) return;
+  lastStone = now;
+  dir = Math.abs(plan.dx) > Math.abs(plan.dz) ? (plan.dx > 0 ? "right" : "left") : plan.dz > 0 ? "down" : "up"; // face the water
+  stones.launch(handOf(sprite.position), plan.touches);
+  if (ws?.readyState === 1) ws.send(JSON.stringify({ t: "stone", pts: plan.touches }));
+}
+// someone else threw one: the same path, from their hand
+function stoneThrown(m) {
+  const o = others.get(m.id);
+  const pts = Array.isArray(m.pts) ? m.pts.filter((p) => Array.isArray(p) && p.every(Number.isFinite)).slice(0, 6) : [];
+  if (o && pts.length) stones.launch(handOf(o.mesh.position), pts);
+}
+// "T skip a stone" over you while you stand by the pond
+const stonePrompt = Object.assign(document.createElement("button"), { id: "stone-prompt", type: "button" });
+stonePrompt.innerHTML = MOBILE ? "tap to skip a stone" : "<kbd>T</kbd> skip a stone";
+stonePrompt.addEventListener("click", (e) => {
+  throwStone();
+  e.currentTarget.blur(); // give the keyboard back to the game
+});
+document.body.append(stonePrompt);
+addEventListener("keydown", (e) => {
+  if (typing() || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key.toLowerCase() === "t") throwStone();
+});
+function updateStonePrompt() {
+  const show = nearPond() && mySeat < 0 && !wall.isOpen() && !bubbles.has(sprite);
+  stonePrompt.classList.toggle("on", show);
+  if (!show) return;
+  _v.set(sprite.position.x, sprite.position.y + 6.2, sprite.position.z).project(camera);
+  stonePrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
+  stonePrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
+}
 function updateWallPrompt() {
   const show = eNow === "wall";
   wallPrompt.classList.toggle("on", show);
@@ -3130,6 +3213,7 @@ function loop() {
     applyLook(dayAmount);
   }
   updateRain(dt);
+  stones.update(dt);
   updateFireflies();
   let dx = 0,
     dz = 0;
@@ -3212,6 +3296,7 @@ function loop() {
   updateBubbles();
   updateSitPrompt(eNow === "sit" ? freeSeat : -1);
   updateWallPrompt();
+  updateStonePrompt();
   requestAnimationFrame(loop);
 }
 loop();
