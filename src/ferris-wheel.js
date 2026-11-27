@@ -7,16 +7,16 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 
 export const WHEEL = {
-  x: 19, // center, on the flat grass the pines leave
+  x: 21.5, // center, on the flat grass the pines leave, far enough from the pond to walk between them
   z: 39,
-  clear: { x0: 10, x1: 28, z0: 28, z1: 50 }, // a pine whose center falls in here is taken out
+  clear: { x0: 10, x1: 31, z0: 28, z1: 50 }, // a pine whose center falls in here is taken out
   seats: 8,
   firstSeat: 24, // after the bench seats (0..15) and the carousel horses (16..23)
   radius: 6, // from the axle to where a gondola hangs
   axle: 7.8, // axle height over the ground: the lowest gondola clears the platform
   turnMs: 60000, // one turn: slower than the carousel, it is a long way up
   // the footprint nobody walks into: the legs and the gondolas going by at the bottom
-  halfWidth: 7.4,
+  halfWidth: 6.6,
   halfDepth: 2,
 };
 const TAU = Math.PI * 2;

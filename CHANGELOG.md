@@ -57,6 +57,7 @@
 - A single room, `lobby`: `?room=` is gone and the server refuses other room names, so nobody can open extra rooms to run up the bill.
 
 ### Fixed
+- **Room to walk between the pond and the Ferris wheel**: the wheel stood so close to the pond's corner that nobody could pass. It moved a little to the right, and only the part of it you can bump into blocks the way.
 - The game no longer fails to start when you come back to a fishing line whose fish got away while the tab was closed.
 - **Stones thrown while your tab was hidden** no longer all fly at once when you come back: a stone someone throws while you are on another tab is skipped.
 - A player whose cap colour is not known shows the cap their trainer is drawn with (red for the male, white for the female) instead of always red.
