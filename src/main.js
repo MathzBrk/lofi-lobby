@@ -217,7 +217,8 @@ resize();
 
 // ---- Town (FBX) ----
 const texLoader = new THREE.TextureLoader();
-const atlas = texLoader.load(TOWN.texture);
+// the atlas cuts out leaves and fences (alphaTest), in the lamp shadows too
+const atlas = texLoader.load(TOWN.texture, () => markLampShadowsStale());
 atlas.magFilter = THREE.NearestFilter;
 atlas.minFilter = THREE.NearestFilter;
 atlas.colorSpace = THREE.SRGBColorSpace;
@@ -313,6 +314,7 @@ function prepareTown(fbx) {
     board.position.y = groundHeight(board.position.x, board.position.z);
     placeCapybara();
     placeCapyWalk();
+    markLampShadowsStale(); // the town, the lamps and everything around them just took their places
 }
 
 // ---- Original village (default on the published site) ----
@@ -675,6 +677,61 @@ for (const k in LOOK)
   if (typeof LOOK[k][0] === "string") LOOK[k] = LOOK[k].map((c) => new THREE.Color(c));
 const lampLights = lampPosts.flatMap((p) => p.children.filter((c) => c.isPointLight));
 const lampGlows = lampPosts.flatMap((p) => p.children.filter((c) => c.isSprite));
+
+// ---- Lamp shadows on demand ----
+// A lamp's shadow is 6 renders (one per cube face) of everything within its reach, which three.js
+// would redo every frame: 24 extra passes for the 4 lamps, more than half of all draw calls.
+// Houses, trees, benches and the wall never move, so a lamp redraws its shadow only when it can
+// change: once the town is in place, when it comes on at dusk, and when something that moves (a
+// trainer, the capybara) changed within its reach. By day the lamps are off and nothing is redrawn.
+// Something moving redraws them when it has gone SHADOW_STEP since the last drawing, changed its
+// animation frame, or stopped (so the shadow settles exactly under it): every frame or so for a
+// walking trainer, about 10 times a second for the capybara, which strolls by the pond all night.
+for (const l of lampLights) (l.shadow.autoUpdate = false), (l.userData.shadowStale = true);
+function markLampShadowsStale() {
+  for (const l of lampLights) l.userData.shadowStale = true;
+}
+const SHADOW_REACH = 3; // a trainer's sprite is 5 units tall: past the light's range it can still reach in
+const SHADOW_STEP = 0.25; // about one texel of a lamp's 512 shadow map, a few units from the lamp
+const drawnMovers = new Map(); // object -> { x, y, z, look, px, py, pz }: where its shadow was drawn, and last frame's spot
+const _lampAt = new THREE.Vector3();
+function updateLampShadows(movers) {
+  // where a shadow must change this frame: where it was drawn and where it goes (one that left, only the old)
+  const changed = [];
+  const seen = new Set();
+  for (const o of movers) {
+    seen.add(o);
+    const { x, y, z } = o.position;
+    // the frame of the sheet it casts its shadow with (the capybara uses its own material's)
+    const map = (o.customDistanceMaterial || o.material)?.map;
+    const look = [o.visible, map?.id, map?.image?.width, map?.offset.x, map?.offset.y, map?.repeat.x].join();
+    const d = drawnMovers.get(o);
+    if (!d) {
+      changed.push({ x, z });
+      drawnMovers.set(o, { x, y, z, look, px: x, py: y, pz: z });
+      continue;
+    }
+    const away = Math.hypot(x - d.x, y - d.y, z - d.z);
+    const stopped = x === d.px && y === d.py && z === d.pz;
+    Object.assign(d, { px: x, py: y, pz: z });
+    if (look === d.look && away < SHADOW_STEP && !(stopped && away > 0)) continue;
+    changed.push({ x: d.x, z: d.z }, { x, z });
+    Object.assign(d, { x, y, z, look });
+  }
+  for (const [o, d] of drawnMovers) if (!seen.has(o)) changed.push(d), drawnMovers.delete(o);
+  for (const l of lampLights) {
+    if (l.intensity <= 0) {
+      l.userData.shadowStale = true; // off: redraw once it comes back on
+      continue;
+    }
+    l.getWorldPosition(_lampAt);
+    const reach = l.distance + SHADOW_REACH;
+    if (l.userData.shadowStale || changed.some((c) => Math.hypot(c.x - _lampAt.x, c.z - _lampAt.z) < reach)) {
+      l.shadow.needsUpdate = true; // three.js clears it once drawn
+      l.userData.shadowStale = false;
+    }
+  }
+}
 // A few candles on the grass between the two pond benches, so sitters aren't in the dark (the posts
 // are far, at the pond's ends): chunky square wax stubs of different heights, small flames, and a
 // very faint warm light that wavers. No shadows, and out by day with the lamps.
@@ -2833,6 +2890,7 @@ function loop() {
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
   showHeld(myHeld, sprite, CHARACTER.cfg, myHold, heldDir(myHold, mySeat >= 0 ? seatSpot(mySeat) : null, !walking, dir));
 
+  updateLampShadows([sprite, capy.mesh, ...[...others.values()].map((o) => o.mesh)]);
   renderer.render(scene, camera);
   updateNameTags();
   updateBubbles();
