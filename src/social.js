@@ -18,6 +18,8 @@ export const MEDALS = {
 // worker/social.js); this copy only says when to stop telling guests about it.
 const FOUNDER_UNTIL = Date.UTC(2026, 11, 1, 3);
 
+const BIO_MAX = 200; // characters of "about me" (the room cuts it there too)
+
 const svg = (d, size = 16) =>
   `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const POP_OUT = '<path d="M14 4h6v6M20 4l-8 8M10 6H5v13h13v-5"/>';
@@ -201,9 +203,40 @@ export function setupSocial(game) {
       if (m.relation === "received") acts.push(icon("yes", "accept friend", () => (friendAction(m.n, "add"), again()), "main"), icon("no", "decline friend", () => (friendAction(m.n, "remove"), again()), "danger"));
       if (m.relation === "friends") acts.push(confirmIcon("remove", "remove friend", "remove friend?", () => (friendAction(m.n, "remove"), again())));
     }
+    // about me: everyone reads it as plain text. Its owner clicks the text to write (or sees the box
+    // with the hint while there is nothing yet); it is saved on leaving the box, or Enter, and the
+    // box is gone again.
+    let about = [];
+    const edit = (holder) => {
+      const box = $("textarea", { className: "bio", maxLength: BIO_MAX, rows: 3, value: m.bio || "", placeholder: "write about yourself, so people can strike up a conversation with you!" });
+      box.setAttribute("aria-label", "about you");
+      const save = () => {
+        const text = box.value.replace(/\s+/g, " ").trim();
+        if (text !== (m.bio || "")) return game.send({ t: "bio", text }); // the room's answer draws the profile again
+        if (m.bio) box.replaceWith(written()); // nothing changed: back to the text
+      };
+      box.addEventListener("blur", save);
+      box.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) (e.preventDefault(), box.blur());
+        if (e.key === "Escape") ((box.value = m.bio || ""), box.blur(), e.stopPropagation());
+      });
+      if (holder) (holder.replaceWith(box), box.focus());
+      return box;
+    };
+    const written = () => {
+      const text = $("p", { className: "bio" + (self ? " mine" : ""), textContent: m.bio }); // textContent: no HTML from a player
+      if (self) {
+        text.title = "edit";
+        text.addEventListener("click", () => edit(text));
+      }
+      return text;
+    };
+    if (m.bio) about = [written()];
+    else if (self) about = [edit()];
     profile.replaceChildren(
       head(m, `#${m.n}`, `since ${day(m.at)}${self ? ` · github @${m.login} (only you see this)` : ""}`),
       $("div", { className: "body" }, lookOf(m.gender, m.cap), side),
+      ...about,
       $("div", { className: "actions" }, ...acts),
     );
   }
