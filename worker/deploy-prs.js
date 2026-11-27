@@ -2,19 +2,21 @@
 // A deploy carries no "which PR" field, so the room keeps the numbers it has already celebrated and,
 // on the first good read of GitHub for a new version, celebrates the merged ones it hasn't seen. Only a
 // new version moves the list on: the reads for stale badge counts don't, so a PR merged before its
-// deploy is still celebrated at that deploy. Only PR numbers come out: the room never shows anyone's
-// GitHub login to others (ADR 014), and the authors' logins never leave it.
+// deploy is still celebrated at that deploy. Only PR numbers come in and out: the room never shows
+// anyone's GitHub login to others (ADR 014).
+//
+// A new VERSION.id is not always a deploy of new code: `wrangler secret put` (or a rollback) also makes
+// one, and a deploy from a branch can lack some merged PRs. Then the show comes early and the real
+// deploy shows nothing (ADR 015, Consequences).
 
-export const CELEBRATE_WINDOW_MS = 15 * 60_000; // a read this long after the deploy was first seen celebrates nothing
-export const SHOW_LEAD_MS = 4000; // the show starts this far ahead, so the tabs reloading after the deploy see it from the start
-export const SHOW_PRS = 5; // PRs with a round of their own; the others are counted in `more`
+const CELEBRATE_WINDOW_MS = 15 * 60_000; // a read this long after the deploy was first seen celebrates nothing
+const SHOW_LEAD_MS = 4000; // the show starts this far ahead, so the tabs reloading after the deploy see it from the start
+const SHOW_PRS = 5; // PRs with a round of their own (MAX_ROUNDS in src/fireworks-plan.js); the others are counted in `more`
 export const SHOW_MAX_MS = 40_000; // longer than any show (6 rounds of 6 s and the dimming): a player who joins later gets none
-
-const LOGIN = /^[a-z0-9-]{1,39}$/; // GitHub's logins, as GH_LOGIN in index.js: a PR counts only with a real author
 
 /**
  * @param {{ v: string, seen: number[] } | undefined} stored the "deploy-prs" key; missing (or broken) = first run
- * @param {{ login: string, n: number }[]} merged the merged PRs of the read, newest first, as GitHub lists them
+ * @param {number[]} merged the numbers of the read's merged PRs (with a real author), as GitHub lists them
  * @param {string} v the deploy now running (VERSION.id)
  * @param {number} firstSeenAt when the room first saw `v` on a connection ("deploy-seen")
  * @param {number} now
@@ -23,11 +25,8 @@ const LOGIN = /^[a-z0-9-]{1,39}$/; // GitHub's logins, as GH_LOGIN in index.js: 
 export function deployPrs(stored, merged, v, firstSeenAt, now) {
   const valid = [];
   const numbers = new Set();
-  for (const pr of Array.isArray(merged) ? merged : []) {
-    const n = pr?.n;
-    const login = pr?.login;
+  for (const n of Array.isArray(merged) ? merged : []) {
     if (!Number.isInteger(n) || n <= 0 || numbers.has(n)) continue;
-    if (typeof login !== "string" || !LOGIN.test(login.toLowerCase())) continue;
     numbers.add(n);
     valid.push(n);
   }

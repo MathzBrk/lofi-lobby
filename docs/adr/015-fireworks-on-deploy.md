@@ -78,6 +78,10 @@ number. The show must not break that.
 - One new server → client message, three new storage keys (`"deploy-prs:<repo>"`, `"deploy-seen"`,
   `"fireworks"`); `seen` grows by one number per merged pull request.
 - The first deploy with this change only records what exists; the shows start from the next one.
+- A new `VERSION.id` is not always new code. `wrangler secret put` and a rollback also publish a version,
+  and a deploy from a branch can lack some merged pull requests. In those cases the room celebrates
+  pull requests that are not live yet, and the real deploy then shows nothing for them. Merge and
+  deploy from `main`, with no secret change in between, keeps the show on the right deploy.
 - A deploy whose GitHub reads all fail for 15 minutes has no show. GitHub's unauthenticated limit is
   low and shared; the room already lives with it for the badges.
 - Locally, every `wrangler dev` restart is a new `VERSION.id`, so the whole path can be tested on a

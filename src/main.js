@@ -6,6 +6,7 @@ import { setupSocial } from "./social.js";
 import { createBoard, setupWall } from "./board.js";
 import { createStones } from "./stones.js";
 import { createFireworks } from "./fireworks.js";
+import { MAX_ROUNDS } from "./fireworks-plan.js";
 import { addSitFrames, sitFramePos } from "./ground-sit.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
 import { createOwl } from "./owl.js";
@@ -4293,7 +4294,7 @@ let dimmed = false;
 const isShow = (m) =>
   Number.isFinite(m.at) &&
   Array.isArray(m.prs) &&
-  m.prs.length <= 5 &&
+  m.prs.length <= MAX_ROUNDS &&
   m.prs.every((n) => Number.isInteger(n) && n > 0) &&
   Number.isInteger(m.more ?? 0) &&
   (m.more ?? 0) >= 0;

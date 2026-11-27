@@ -1,5 +1,6 @@
 // Dev-only deploy fireworks preview for the Debug Hub (src/debug.js, ADR 010): plays a show with test
 // pull requests in this tab only, nothing is sent to the room. Loaded only under import.meta.env.DEV.
+import { MAX_ROUNDS } from "./fireworks-plan.js";
 
 const FIREWORKS_DEBUG_CSS = `
   .dbg-fw { display: flex; gap: 4px; flex-wrap: wrap; }
@@ -26,7 +27,7 @@ export function createFireworksDebugModule({ playFireworks }) {
       for (const b of container.querySelectorAll("button[data-prs]")) {
         b.addEventListener("click", () => {
           const count = Number(b.dataset.prs);
-          playFireworks(TEST_PRS.slice(0, Math.min(5, count)), Math.max(0, count - 5));
+          playFireworks(TEST_PRS.slice(0, Math.min(MAX_ROUNDS, count)), Math.max(0, count - MAX_ROUNDS));
           b.blur(); // give the keyboard back to the game
         });
       }

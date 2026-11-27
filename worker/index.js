@@ -923,7 +923,7 @@ export class Room {
     if (!GH_REPO.test(repo)) return;
     this.ghTriedAt = Date.now();
     const counts = {};
-    const merged = []; // { login, n }, for the deploy's fireworks (only the numbers are shown)
+    const merged = []; // the merged PRs' numbers, for the deploy's fireworks
     for (let page = 1; page <= GH_PAGES; page++) {
       const res = await fetch(`${GH_API}/repos/${repo}/pulls?state=closed&per_page=100&page=${page}`, { headers });
       if (!res.ok) return;
@@ -933,7 +933,7 @@ export class Room {
         const login = typeof pr?.user?.login === "string" ? pr.user.login.toLowerCase() : "";
         if (pr?.merged_at && GH_LOGIN.test(login)) {
           counts[login] = (counts[login] || 0) + 1;
-          merged.push({ login, n: pr.number });
+          merged.push(pr.number);
         }
       }
       if (list.length < 100) break;

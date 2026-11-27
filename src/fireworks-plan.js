@@ -3,7 +3,7 @@
 
 export const ROUND_MS = 6000; // one round per pull request: a few bursts and its "PR #n"
 export const MAX_ROUNDS = 5; // PRs with a round of their own (the room sends at most this many)
-export const DIM_MS = 1000; // the light dims this long before the first round and comes back this long after the last
+const DIM_MS = 1000; // the light dims this long before the first round and comes back this long after the last
 
 /**
  * @param {number[]} prs PR numbers; no login, the room never shows one to others (ADR 014)
