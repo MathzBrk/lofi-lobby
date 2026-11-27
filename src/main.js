@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
 import { createBoard, setupWall } from "./board.js";
 import { createStones } from "./stones.js";
@@ -317,7 +318,86 @@ function prepareTown(fbx) {
     board.position.y = groundHeight(board.position.x, board.position.z);
     placeCapybara();
     placeCapyWalk();
+    mergeTown(fbx);
     markLampShadowsStale(); // the town, the lamps and everything around them just took their places
+}
+
+// ---- Drawing the town in few draw calls ----
+// The town comes as ~1,300 meshes sharing one or a few materials, and each one would be a draw call
+// in every pass: the camera, the moon/sun's shadow and each of the 6 faces of each lamp's shadow.
+// Their geometry is baked into one mesh per material, shadow setting and stretch of town. The
+// originals stay where they are, hidden: collision, ground height, the water and the pond edge keep
+// raycasting them (a ray ignores visibility), so all of that works exactly as before.
+const TOWN_CHUNK = 25; // side of a stretch of town: the camera and each lamp still skip the ones they can't see
+const DRAWN_ATTRIBUTES = /^(position|normal|uv|color)$/;
+let townDrawn = []; // what is actually drawn: the merged meshes and whatever could not be merged
+function mergeTown(root) {
+  root.updateMatrixWorld(true);
+  const groups = new Map();
+  const center = new THREE.Vector3();
+  townDrawn = [];
+  root.traverse((o) => {
+    if (!o.isMesh || !o.visible) return;
+    const g = o.geometry;
+    if (Array.isArray(o.material) || !g.attributes.position || Object.keys(g.morphAttributes).length) {
+      townDrawn.push(o);
+      return;
+    }
+    new THREE.Box3().setFromObject(o).getCenter(center);
+    // geometries only merge with the same attributes, so they are part of the key
+    const attrs = Object.entries(g.attributes)
+      .filter(([n]) => DRAWN_ATTRIBUTES.test(n))
+      .map(([n, a]) => `${n}:${a.itemSize}:${a.array.constructor.name}:${a.normalized}`)
+      .sort()
+      .join();
+    const key = [o.material.uuid, o.castShadow, o.receiveShadow, o.renderOrder, attrs,
+      Math.floor(center.x / TOWN_CHUNK), Math.floor(center.z / TOWN_CHUNK)].join("|");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(o);
+  });
+  for (const meshes of groups.values()) {
+    const indexed = meshes.every((o) => o.geometry.index);
+    const geos = meshes.map((o) => bakeGeometry(o, indexed));
+    const merged = mergeGeometries(geos);
+    geos.forEach((g) => g.dispose());
+    if (!merged) {
+      townDrawn.push(...meshes);
+      continue;
+    }
+    const first = meshes[0];
+    const mesh = new THREE.Mesh(merged, first.material);
+    mesh.name = "TownMerged";
+    mesh.castShadow = first.castShadow;
+    mesh.receiveShadow = first.receiveShadow;
+    mesh.renderOrder = first.renderOrder;
+    mesh.matrixAutoUpdate = false; // the geometry is already in world space
+    scene.add(mesh);
+    townDrawn.push(mesh);
+    for (const o of meshes) o.visible = false;
+  }
+}
+// A copy of the mesh's geometry in world space, with only what drawing needs.
+function bakeGeometry(o, indexed) {
+  let g = o.geometry.clone();
+  for (const n of Object.keys(g.attributes)) if (!DRAWN_ATTRIBUTES.test(n)) g.deleteAttribute(n);
+  g.clearGroups();
+  if (!indexed && g.index) g = g.toNonIndexed();
+  g.applyMatrix4(o.matrixWorld);
+  // a mirrored mesh (negative scale) is drawn with its faces turned the other way; baked, its
+  // triangles must be turned around instead, or lights and shadows would see their backs
+  if (o.matrixWorld.determinant() < 0) {
+    if (g.index) {
+      const ix = g.index.array;
+      for (let i = 0; i < ix.length; i += 3) [ix[i + 1], ix[i + 2]] = [ix[i + 2], ix[i + 1]];
+    } else {
+      for (const a of Object.values(g.attributes)) {
+        const s = a.itemSize, v = a.array;
+        for (let t = 0; t < a.count; t += 3)
+          for (let k = 0; k < s; k++) [v[(t + 1) * s + k], v[(t + 2) * s + k]] = [v[(t + 2) * s + k], v[(t + 1) * s + k]];
+      }
+    }
+  }
+  return g;
 }
 
 // ---- Original village (default on the published site) ----
@@ -429,22 +509,16 @@ function loadOriginalTown() {
   prepareTown(createOriginalTown());
 }
 
+const townMaterial = new THREE.MeshLambertMaterial({ map: atlas, alphaTest: 0.5, side: THREE.DoubleSide });
 new FBXLoader(manager).load(
   TOWN.fbx,
   (fbx) => {
     fbx.traverse((o) => {
       if (!o.isMesh) return;
       o.castShadow = o.receiveShadow = true;
-      const mats = Array.isArray(o.material) ? o.material : [o.material];
-      o.material = mats.map(
-        (m) =>
-          new THREE.MeshLambertMaterial({
-            map: atlas,
-            alphaTest: 0.5,
-            side: THREE.DoubleSide,
-          }),
-      );
-      if (o.material.length === 1) o.material = o.material[0];
+      // every part of the town uses the same atlas: one material for all (the whole mesh, so
+      // no groups needed), which also lets them be drawn together (mergeTown)
+      o.material = townMaterial;
       // water surface: translucent blue, slightly shiny, and blocks movement
       // the water name may be on the mesh or on a parent group (e.g. MainTownPondWater)
       let waterName = "";
@@ -1195,10 +1269,10 @@ let wetReady = false;
 // Wet look: the town's materials become shiny (Phong) and a bit darker while it rains,
 // so the ground catches the lamps and the sky like a wet street. No extra meshes.
 function prepareWet() {
-  if (wetReady || !townMeshes.length) return;
+  if (wetReady || !townDrawn.length) return;
   wetReady = true;
   const swapped = new Map();
-  for (const o of townMeshes) {
+  for (const o of townDrawn) {
     const swap = (m) => {
       if (!m || m === waterMaterial || !m.isMeshLambertMaterial) return m;
       if (!swapped.has(m)) {
