@@ -3,8 +3,7 @@
 // on the first good read of GitHub for a new version, celebrates the merged ones it hasn't seen. Only a
 // new version moves the list on: the reads for stale badge counts don't, so a PR merged before its
 // deploy is still celebrated at that deploy. Only PR numbers come out: the room never shows anyone's
-// GitHub login to others (ADR 014), and the authors' logins never leave it. Pure, so it can be tested
-// without the Durable Object.
+// GitHub login to others (ADR 014), and the authors' logins never leave it.
 
 export const CELEBRATE_WINDOW_MS = 15 * 60_000; // a read this long after the deploy was first seen celebrates nothing
 export const SHOW_LEAD_MS = 4000; // the show starts this far ahead, so the tabs reloading after the deploy see it from the start

@@ -23,7 +23,7 @@ number. The show must not break that.
 
 ## Decision
 
-- **What a deploy celebrates** (`worker/deploy-prs.js`, a pure function with tests): the merged pull
+- **What a deploy celebrates** (`worker/deploy-prs.js`): the merged pull
   requests the room has not celebrated yet, decided on the first good GitHub read for a new
   `VERSION.id`. The celebrated numbers are kept per repository (`"deploy-prs:<repo>"`: `{ v, seen }`).
   - **First run** (no key yet) celebrates nothing and only records what exists, so the whole history
@@ -45,7 +45,7 @@ number. The show must not break that.
   to know who wrote #65 looks it up on GitHub, outside the game.
 - **The same second for everyone**: `at` is 4 s ahead on the room's clock, so the tabs reloading after
   the deploy are back for the start; a player who joins during the show gets the message on join and
-  sees only what is left of it (`SHOW_MAX_MS`, 40 s). The timeline (`src/fireworks-plan.js`, tested):
+  sees only what is left of it (`SHOW_MAX_MS`, 40 s). The timeline (`src/fireworks-plan.js`):
   one 6 s round per pull request, at most 5, then one "+ N more" round with the real number.
 - **Drawn from time, not integrated** (`src/fireworks.js`): every spark's place is a function of the
   room's clock and a seed per round (a small mulberry32), so every tab shows the same picture and a tab
@@ -83,4 +83,3 @@ number. The show must not break that.
 - Locally, every `wrangler dev` restart is a new `VERSION.id`, so the whole path can be tested on a
   laptop. On Cloudflare (checked on a deploy of my own), the show came 20 s after the deploy through the
   alarm, to a tab that never reconnected.
-- `package.json` gets a `test` script (`node --test`) and CI runs it.
