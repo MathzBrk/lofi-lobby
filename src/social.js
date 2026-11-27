@@ -14,6 +14,10 @@ export const MEDALS = {
   },
 };
 
+// Until when a new account gets the Founding member medal: the room decides (FOUNDER_UNTIL in
+// worker/social.js); this copy only says when to stop telling guests about it.
+const FOUNDER_UNTIL = Date.UTC(2026, 11, 1, 3);
+
 const svg = (d, size = 16) =>
   `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
 const POP_OUT = '<path d="M14 4h6v6M20 4l-8 8M10 6H5v13h13v-5"/>';
@@ -96,6 +100,10 @@ export function setupSocial(game) {
     enterLogin.innerHTML = account ? `${ICON.yes}<span>#${account.n}</span>` : `${ICON.github}<span>log in</span>`;
     enterLogin.classList.toggle("in", !!account);
     enterLogin.title = account ? `logged in: account #${account.n}` : "log in with github";
+    // a guest is told about the medal while it can still be had: on the start screen, and once in the room
+    const offer = !account && Date.now() < FOUNDER_UNTIL;
+    document.querySelector("#enter-founder").hidden = !offer;
+    if (!offer) founderCard?.remove();
   }
   accountBtn.addEventListener("click", () => (accountBtn.blur(), account ? openProfile(account.n, { ...game.me(), online: true }) : game.login()));
   friendsBtn.addEventListener("click", () => (friendsBtn.blur(), openFriends()));
@@ -461,6 +469,25 @@ export function setupSocial(game) {
     drawTab(c);
     drawAccount();
   }
+  // Founding member: a card at the top of the screen for a guest who just walked in, with the medal,
+  // a log in button and a ✕ that is remembered.
+  let founderCard = null;
+  function offerFounder() {
+    let seen = false;
+    try { seen = localStorage.getItem("founder-notice") === "seen"; } catch {}
+    if (account || seen || founderCard?.isConnected || Date.now() >= FOUNDER_UNTIL) return;
+    founderCard = $("div", { className: "glass invite founder" }, $("img", { src: MEDALS.founder.img, alt: "", width: 32, height: 32 }),
+      $("span", { innerHTML: "create your account until <b>nov 30</b><br>and get the <b>founding member</b> medal" }),
+      icon("github", "log in", () => game.login(), "github"),
+      icon("no", "close", () => {
+        founderCard.remove();
+        try { localStorage.setItem("founder-notice", "seen"); } catch {}
+      }));
+    invites.prepend(founderCard);
+  }
+  // in the room (the start screen is gone), and after the room had a moment to say who this browser is
+  addEventListener("game:pause", (e) => !e.detail && setTimeout(offerFounder, 1500));
+
   // someone who is not a friend asks for a private chat: a small card to say yes or no
   function invited(m) {
     if ([...invites.children].some((el) => el.dataset.n === String(m.from))) return;
