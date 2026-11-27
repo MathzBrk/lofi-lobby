@@ -6,7 +6,7 @@
 //  - front and back: the body drops 3 px and the legs become a lap across the bottom (trousers or
 //    skirt colour, a shade under it) with the shoes at its ends (only the heels from the back);
 //  - sideways: the body drops and the legs run from the hip, under the body, out in front of it to
-//    the shoe. The body is drawn over the legs, so only the shin and the shoe show past it.
+//    the shoe. The body is drawn over the legs, so only the shoe shows past it.
 
 export const SIT_DIRS = ["down", "left", "right", "up"]; // the row's order
 const GAP = 2;
@@ -78,9 +78,11 @@ function sitFrame(src, p, dir) {
 
   body();
   if (dir === "down" || dir === "up") {
-    // a lap across the bottom, a little wider than the hips
-    const L = cx - 6,
-      R = cx + 6;
+    // a lap across the bottom, a little wider than the hips, centred on the whole body (the hips'
+    // own row can be lopsided: a bag, a hand lower on one side)
+    const mid = Math.round((x0 + x1) / 2);
+    const L = mid - 6,
+      R = mid + 6;
     rect(L - 1, ly - 1, R - L + 3, 4, OUTLINE);
     rect(L, ly, R - L + 1, 1, leg);
     rect(L, ly + 1, R - L + 1, 1, shade);
@@ -90,7 +92,7 @@ function sitFrame(src, p, dir) {
       rect(R - 1, ly, 2, 2, shoe);
       rect(L + 2, ly, 1, 2, OUTLINE);
       rect(R - 2, ly, 1, 2, OUTLINE);
-      rect(cx, ly, 1, 1, OUTLINE); // where the knees meet
+      rect(mid, ly, 1, 1, OUTLINE); // where the knees meet
     } else {
       // from the back, only the heels
       rect(L, ly + 1, 2, 1, shoe);
@@ -100,7 +102,7 @@ function sitFrame(src, p, dir) {
     // sideways: from the back of the hip, under the body, out past its front to the shoe
     const s = dir === "left" ? -1 : 1;
     const hip = s < 0 ? hx1 - 3 : hx0 + 3;
-    const tip = (s < 0 ? hx0 : hx1) + s * 5;
+    const tip = (s < 0 ? hx0 : hx1) + s * 2; // just the shoe past the body's front
     const a = Math.min(hip, tip),
       b = Math.max(hip, tip);
     const y = ly - 1;
