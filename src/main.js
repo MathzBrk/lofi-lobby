@@ -3,6 +3,7 @@ import { FBXLoader } from "three/examples/jsm/loaders/FBXLoader.js";
 import { connectRadioToServer, receiveCommand } from "./radio.js";
 import { createBoard, setupWall } from "./board.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
+import { createFishing, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
 
 // ---- Asset config (change here to use other files) ----
 const TOWN = {
@@ -2070,11 +2071,9 @@ const toggleSit = () => {
 addEventListener("keydown", (e) => {
   const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
   const k = e.key.toLowerCase();
-  // by the message board, E opens it (unless you're seated: then it stands you up)
   if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "q") cycleHold();
-  if (!typing && !e.repeat && !e.ctrlKey && !e.metaKey && k === "e") (mySeat >= 0 || (!nearBoard() && !nearCapy())) && toggleSit();
   // a quick tap on a move key can end before the next frame: stand up right away
-  else if (!typing && !gamePaused && mySeat >= 0 && MOVE_KEYS[k]) {
+  if (!typing && !gamePaused && mySeat >= 0 && MOVE_KEYS[k]) {
     dir = MOVE_KEYS[k];
     standUp(true, FACING[dir]);
   }
@@ -2875,7 +2874,7 @@ const nearBoard = () => Math.hypot(pos.x - board.position.x, pos.z - board.posit
 addEventListener("keydown", (e) => {
   if (typing() || e.repeat || gamePaused || e.metaKey || e.ctrlKey || e.altKey) return;
   const k = e.key.toLowerCase();
-  if ((k === "e" && nearBoard()) || k === "b") wall.show();
+  if (k === "b") wall.show();
 });
 // near the capybara: a prompt over it ("E" or tap to feed); feeding opens its ironic thank-you bubble
 const capyPrompt = Object.assign(document.createElement("button"), { id: "capy-prompt", type: "button" });
@@ -2895,16 +2894,12 @@ capyPrompt.addEventListener("click", (e) => {
 document.body.append(capyPrompt);
 const nearCapy = () =>
   mySeat < 0 && !nearBoard() && Math.hypot(pos.x - capy.mesh.position.x, pos.z - capy.mesh.position.z) < CAPY_NEAR;
-addEventListener("keydown", (e) => {
-  if (typing() || e.repeat || gamePaused || wall.isOpen() || e.metaKey || e.ctrlKey || e.altKey) return;
-  if (e.key.toLowerCase() === "e" && nearCapy()) feedCapy();
-});
 function updateCapy() {
   const t = roomNow();
   walkCapy(t);
   capy.update(t);
   capy.mesh.rotation.set(camera.rotation.x * 0.5, 0, 0); // faces the camera like the trainers
-  const show = nearCapy() && !wall.isOpen() && !gamePaused && !bubbles.has(capy.mesh);
+  const show = eNow === "capy" && !bubbles.has(capy.mesh);
   capyPrompt.classList.toggle("on", show);
   if (!show) return;
   _v.set(capy.mesh.position.x, capy.mesh.position.y + 5, capy.mesh.position.z).project(camera);
@@ -2912,12 +2907,136 @@ function updateCapy() {
   capyPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
 }
 function updateWallPrompt() {
-  const show = nearBoard() && !wall.isOpen() && !gamePaused;
+  const show = eNow === "wall";
   wallPrompt.classList.toggle("on", show);
   if (!show) return;
   _v.set(board.position.x, board.position.y + 7.4, board.position.z).project(camera);
   wallPrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
   wallPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
+}
+
+const fishing = createFishing({
+  scene,
+  button: document.querySelector("#fish"),
+  say: (text) => showBubble(sprite, text),
+  feetDepth: (mesh) => useFeetDepth(mesh, myFeet, 12),
+  camera,
+  shape: (d) => bodyShape(sprite.material.map, CHARACTER.cfg, d),
+});
+/**
+ * Where you could cast from: at the pond's edge (standing or seated), facing the water.
+ * @returns {{x: number, z: number, d: number, face: string, seat: number} | null} d: distance to the pond's box
+ */
+function fishSpot() {
+  if (!pondBox) return null;
+  const s = mySeat >= 0 ? seatSpot(mySeat) : null;
+  const x = s ? s.x : pos.x,
+    z = s ? s.z : pos.z,
+    face = s ? s.dir : dir;
+  const { min, max } = pondBox;
+  const cx = THREE.MathUtils.clamp(x, min.x, max.x),
+    cz = THREE.MathUtils.clamp(z, min.z, max.z);
+  const d = Math.hypot(cx - x, cz - z);
+  if (!d || d > FISH_NEAR) return null;
+  const [fx, fz] = FACING[face];
+  if ((fx * (cx - x) + fz * (cz - z)) / d < 0.5) return null;
+  return { x, z, d, face, seat: mySeat };
+}
+const _castFrom = new THREE.Vector3();
+/** Casts from where you are now, if still at the edge; the bobber lands a few steps out. */
+function castHere(minutes) {
+  const s = fishSpot();
+  if (!s) return;
+  const [fx, fz] = FACING[s.face];
+  const { min, max } = pondBox;
+  const tx = THREE.MathUtils.clamp(s.x + fx * (s.d + 3.5), min.x + 1.5, max.x - 1.5),
+    tz = THREE.MathUtils.clamp(s.z + fz * (s.d + 3.5), min.z + 1.5, max.z - 1.5);
+  ray.set(_castFrom.set(tx, 200, tz), DOWN);
+  const hit = ray.intersectObjects([...waterMeshes], false)[0];
+  fishing.cast({ x: s.x, z: s.z, face: s.face, seat: s.seat, target: { x: tx, y: hit ? hit.point.y : pos.y, z: tz } }, minutes);
+}
+/** @param {number} id seat @returns {number} distance from you to that seat */
+const seatDistance = (id) => {
+  const s = seatSpot(id);
+  return s ? Math.hypot(s.x - pos.x, s.z - pos.z) : Infinity;
+};
+
+let eNow = null;
+/**
+ * What E does right now: the line if it is out, standing up if seated, then the wall, the capybara,
+ * and last the pond's edge or the free seat, whichever is closer. Only that action's prompt shows.
+ * @param {number} [seat] nearest free seat, if already known this frame
+ * @returns {"fish" | "stand" | "wall" | "capy" | "cast" | "sit" | null}
+ */
+function eAction(seat = nearestFreeSeat()) {
+  if (gamePaused || wall.isOpen()) return null;
+  const p = fishing.phase();
+  if (p === "focus" || p === "bite") return "fish";
+  if (mySeat >= 0) return "stand";
+  if (nearBoard()) return "wall";
+  if (nearCapy()) return "capy";
+  const spot = fishSpot();
+  if (spot && (seat < 0 || spot.d < seatDistance(seat))) return "cast";
+  return seat >= 0 ? "sit" : null;
+}
+/** Runs an action from eAction (E, a prompt or the fish button). */
+function doE(action = eAction()) {
+  if (action === "fish") fishing.press();
+  else if (action === "cast") fishSpot() && fishing.choose(castHere);
+  else if (action === "wall") wall.show();
+  else if (action === "capy") feedCapy();
+  else if (action === "stand" || action === "sit") toggleSit();
+}
+addEventListener("keydown", (e) => {
+  if (typing() || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key.toLowerCase() === "e") doE();
+});
+const fishBtn = document.querySelector("#fish");
+fishBtn.addEventListener("click", (e) => {
+  if (!gamePaused) doE(fishing.phase() === "idle" ? "cast" : "fish");
+  e.currentTarget.blur();
+});
+const fishPrompt = Object.assign(document.createElement("button"), { id: "fish-prompt", type: "button" });
+fishPrompt.addEventListener("click", (e) => {
+  doE(fishPrompt.dataset.action);
+  e.currentTarget.blur();
+});
+document.body.append(fishPrompt);
+let fishRestored = false;
+/**
+ * Each frame: puts you back where a line was cast after a reload, reels it in if you walk away,
+ * draws the gear and places the fish prompt.
+ */
+function updateFishing() {
+  const now = Date.now();
+  let s = fishing.spot();
+  if (!fishRestored && savedPosChecked && pondBox) {
+    fishRestored = true;
+    if (s && s.seat >= 0 && seatSpot(s.seat)) sit(s.seat);
+    else if (s && isFree(s.x, s.z, topHeight(s.x, s.z))) pos.set(s.x, topHeight(s.x, s.z), s.z), (dir = s.face);
+  }
+  if (fishing.choosing() && (gamePaused || !fishSpot())) fishing.closePicker();
+  if (fishRestored && s && Math.hypot(pos.x - s.x, pos.z - s.z) > FISH_LEAVE) fishing.reelIn(), (s = null);
+  fishing.draw(now, sprite, dir);
+  const p = fishing.phase(now),
+    here = s ? null : fishSpot();
+  fishBtn.hidden = p === "idle" && !here;
+  const text = eNow === "cast" ? "fish" : eNow === "fish" && p === "bite" ? "pull it in!" : eNow === "fish" && fishing.confirming() ? "again to reel in" : "";
+  const show = !!text && !typing() && !!(s || here);
+  fishPrompt.classList.toggle("on", show);
+  fishPrompt.classList.toggle("bite", p === "bite");
+  if (!show) return;
+  const html = MOBILE ? `tap ${text === "fish" ? "to fish" : text === "pull it in!" ? "to pull it in!" : "again to reel in"}` : `<kbd>E</kbd> ${text}`;
+  if (fishPrompt.innerHTML !== html) fishPrompt.innerHTML = html;
+  fishPrompt.dataset.action = eNow;
+  if (s) _v.set(s.target.x, s.target.y + 2.2, s.target.z);
+  else {
+    const [fx, fz] = FACING[here.face];
+    _v.set(here.x + fx * (here.d + 2.5), pos.y + 2.2, here.z + fz * (here.d + 2.5));
+  }
+  _v.project(camera);
+  fishPrompt.style.left = `${(_v.x * 0.5 + 0.5) * innerWidth}px`;
+  fishPrompt.style.top = `${(-_v.y * 0.5 + 0.5) * innerHeight}px`;
 }
 
 function loop() {
@@ -2985,6 +3104,7 @@ function loop() {
   setFrame(dir, currentStep, running);
   sendPosition(performance.now(), currentStep, running);
   const freeSeat = mySeat >= 0 ? -1 : nearestFreeSeat();
+  eNow = eAction(freeSeat);
   updateHoldButton();
   updateOthers(dt);
 
@@ -3004,6 +3124,7 @@ function loop() {
   camera.position.set(pos.x + slide.x, pos.y + 38, pos.z + 42 + slide.z);
   camera.lookAt(pos.x + slide.x, pos.y + 1, pos.z + slide.z);
   updateCapy();
+  updateFishing();
   updateOcclusion();
   // facing the camera, tilted only halfway (the shadow looks like a standing body)
   sprite.rotation.set(camera.rotation.x * 0.5, 0, 0);
@@ -3013,7 +3134,7 @@ function loop() {
   renderer.render(scene, camera);
   updateNameTags();
   updateBubbles();
-  updateSitPrompt(freeSeat);
+  updateSitPrompt(eNow === "sit" ? freeSeat : -1);
   updateWallPrompt();
   requestAnimationFrame(loop);
 }
