@@ -2523,6 +2523,48 @@ const bubbles = new Map(); // owner (mesh) -> { el, until }
 // any text field (chat or the admin login): game keys and the Enter shortcut stay out of it
 const typing = () => ["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName);
 
+// ---- Mentions: "@name" in the chat ----
+// Everyone sees the message; it's highlighted only for whoever it names. Names aren't unique and can
+// have spaces, so "@" is matched against the names in the room (the longest that fits wins), without
+// telling upper from lower case, and must end where the name ends (not in the middle of a word).
+const roomNames = () => {
+  const all = new Map(); // lower case -> { name, color }
+  for (const o of others.values()) if (o.name) all.set(o.name.toLowerCase(), { name: o.name, color: o.color });
+  all.set(NAME.toLowerCase(), { name: NAME, color: COLOR });
+  return [...all.values()].sort((a, b) => b.name.length - a.name.length);
+};
+const endsWord = (text, i) => i >= text.length || !/[\p{L}\p{N}_]/u.test(text[i]);
+// the text split into plain parts and mentions: [{ text }, { text, at: { name, color } }, ...]
+function mentionParts(text) {
+  const names = roomNames(),
+    lower = text.toLowerCase(),
+    parts = [];
+  let from = 0;
+  for (let i = text.indexOf("@"); i >= 0; i = text.indexOf("@", i + 1)) {
+    const hit = names.find((n) => lower.startsWith(n.name.toLowerCase(), i + 1) && endsWord(text, i + 1 + n.name.length));
+    if (!hit) continue;
+    const end = i + 1 + hit.name.length;
+    if (i > from) parts.push({ text: text.slice(from, i) });
+    parts.push({ text: text.slice(i, end), at: hit });
+    from = end;
+    i = end - 1; // the next "@" is searched for after this mention
+  }
+  if (from < text.length) parts.push({ text: text.slice(from) });
+  return parts;
+}
+const mentionsMe = (parts) => parts.some((p) => p.at && p.at.name.toLowerCase() === NAME.toLowerCase());
+// the message's text with each "@name" in bold, in that player's name colour (textContent only: no HTML)
+function mentionText(el, parts) {
+  el.replaceChildren(
+    ...parts.map((p) => {
+      if (!p.at) return document.createTextNode(p.text);
+      const b = Object.assign(document.createElement("b"), { className: "at", textContent: p.text });
+      paintName(b, p.at.color);
+      return b;
+    }),
+  );
+}
+
 function addToHistory(name, text, id, admin, color) {
   const d = document.createElement("div");
   d.className = admin ? "m admin" : "m";
@@ -2534,7 +2576,13 @@ function addToHistory(name, text, id, admin, color) {
     s.addEventListener("click", (e) => openModMenu(e, id, name));
   }
   const t = document.createElement("span");
-  t.textContent = text; // textContent: no HTML from the chat
+  if (name === "system") t.textContent = text; // textContent: no HTML from the chat
+  else {
+    const parts = mentionParts(text);
+    mentionText(t, parts);
+    // someone else named you: highlighted for you only
+    if (mentionsMe(parts) && id !== myId && id !== "me") d.classList.add("mention");
+  }
   d.append(s, t);
   // follow new messages only if already at the bottom (don't yank someone reading old ones)
   const atBottom = elMsgs.scrollHeight - elMsgs.scrollTop - elMsgs.clientHeight < 40;
@@ -2543,7 +2591,7 @@ function addToHistory(name, text, id, admin, color) {
   if (atBottom || name === NAME) elMsgs.scrollTop = elMsgs.scrollHeight;
 }
 
-function showBubble(owner, text) {
+function showBubble(owner, text, mention = false) {
   let b = bubbles.get(owner);
   if (!b) {
     b = {
@@ -2553,6 +2601,7 @@ function showBubble(owner, text) {
     document.body.append(b.el);
     bubbles.set(owner, b);
   }
+  b.el.classList.toggle("mention", mention);
   b.el.replaceChildren(
     Object.assign(document.createElement("span"), { textContent: text }),
   );
@@ -2678,7 +2727,7 @@ function updateBubbles() {
 function receiveChat(id, name, text, admin, color) {
   addToHistory(name, text, id, admin, color);
   const owner = id === myId || id === "me" ? sprite : others.get(id)?.mesh;
-  if (owner) showBubble(owner, text);
+  if (owner) showBubble(owner, text, owner !== sprite && mentionsMe(mentionParts(text)));
 }
 
 // tapping send must not steal focus from the box (it would close the phone keyboard)
@@ -2744,6 +2793,75 @@ elInput.addEventListener("focus", () => {
   if (!MOBILE) elInput.placeholder = "Esc or empty Enter to walk…";
 });
 elInput.addEventListener("blur", () => !MOBILE && (elInput.placeholder = idlePlaceholder));
+
+// Typing "@" lists the players in the room whose names start with what follows; arrows pick,
+// Tab or Enter puts the name in, Esc closes the list.
+const atList = Object.assign(document.createElement("div"), { id: "at-list", hidden: true });
+atList.setAttribute("role", "listbox");
+document.querySelector("#chat form").before(atList);
+let atPick = 0,
+  atFrom = -1;
+const atMatches = () => {
+  const caret = elInput.selectionStart ?? elInput.value.length;
+  const before = elInput.value.slice(0, caret);
+  const i = before.lastIndexOf("@");
+  if (i < 0 || (i > 0 && !/\s/.test(before[i - 1]))) return null; // "@" starts a word
+  const query = before.slice(i + 1).toLowerCase();
+  if (query.length > 16) return null;
+  const names = roomNames()
+    .filter((n) => n.name.toLowerCase() !== NAME.toLowerCase() && n.name.toLowerCase().startsWith(query))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, 6);
+  return names.length ? { at: i, names } : null;
+};
+function drawAtList() {
+  const m = atMatches();
+  atList.hidden = !m;
+  if (!m) return;
+  atFrom = m.at;
+  atPick = Math.min(atPick, m.names.length - 1);
+  atList.replaceChildren(
+    ...m.names.map((n, i) => {
+      const b = Object.assign(document.createElement("button"), { type: "button", textContent: "@" + n.name });
+      b.setAttribute("role", "option");
+      b.setAttribute("aria-selected", i === atPick);
+      b.classList.toggle("on", i === atPick);
+      paintName(b, n.color);
+      b.addEventListener("pointerdown", (e) => e.preventDefault()); // keep the focus (and the phone keyboard) in the box
+      b.addEventListener("click", () => putAt(n.name));
+      return b;
+    }),
+  );
+}
+function putAt(name) {
+  const caret = elInput.selectionStart ?? elInput.value.length;
+  const v = elInput.value;
+  const text = (v.slice(0, atFrom) + "@" + name + " " + v.slice(caret)).slice(0, 140);
+  elInput.value = text;
+  const at = Math.min(140, atFrom + name.length + 2);
+  elInput.setSelectionRange(at, at);
+  atList.hidden = true;
+  atPick = 0;
+}
+elInput.addEventListener("input", () => ((atPick = 0), drawAtList()));
+elInput.addEventListener("click", drawAtList);
+elInput.addEventListener("blur", () => (atList.hidden = true));
+elInput.addEventListener("keydown", (e) => {
+  if (atList.hidden) return;
+  const n = atList.children.length;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    atPick = (atPick + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+    drawAtList();
+  } else if (e.key === "Tab" || e.key === "Enter") {
+    e.preventDefault(); // pick the name instead of sending
+    e.stopPropagation();
+    atList.children[atPick]?.click();
+  } else if (e.key === "Escape") {
+    e.stopPropagation(); // close the list, stay in the box
+    atList.hidden = true;
+  }
+});
 
 // ---- Message wall ----
 const wall = setupWall({ getName: () => NAME, getGender: () => GENDER, isAdmin: () => IS_ADMIN });
