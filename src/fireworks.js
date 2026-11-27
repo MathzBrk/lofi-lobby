@@ -1,4 +1,4 @@
-// Fireworks after a deploy (ADR 015): a few bursts and the "PR #n" of each new pull request,
+// Fireworks after a deploy (ADR 016): a few bursts and the "PR #n" of each new pull request,
 // written in sparks over the town. Everything is drawn from the room's clock and a seed per round
 // (src/fireworks-plan.js), never integrated frame by frame: every tab shows the same picture, and a tab
 // that was hidden comes back to the current moment instead of a pile of bursts.

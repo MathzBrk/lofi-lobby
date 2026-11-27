@@ -1,4 +1,4 @@
-# ADR 015: Fireworks over the town after a deploy, for the pull requests it brought
+# ADR 016: Fireworks over the town after a deploy, for the pull requests it brought
 
 | | |
 |---|---|

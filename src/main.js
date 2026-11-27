@@ -4284,7 +4284,7 @@ const stones = createStones(scene, { surfaceY: (x, z) => topHeight(x, z), camera
 
 // ---- Deploy fireworks ----
 // After a deploy the room sends the new pull requests' numbers: a short show by the room's clock, the
-// same second in every tab (src/fireworks.js, ADR 015). While it runs the light dims toward the night
+// same second in every tab (src/fireworks.js, ADR 016). While it runs the light dims toward the night
 // look, so it shows by day too; the player's own day/night choice stays in currentLook.
 const fireworks = createFireworks();
 scene.add(fireworks.points);

@@ -1,4 +1,4 @@
-// The deploy fireworks' timeline (ADR 015): which round is on and how far into it, from the show's
+// The deploy fireworks' timeline (ADR 016): which round is on and how far into it, from the show's
 // start `at` and the room's clock, so every tab is on the same round at the same second.
 
 export const ROUND_MS = 6000; // one round per pull request: a few bursts and its "PR #n"

@@ -1,4 +1,4 @@
-// Which merged pull requests a deploy celebrates with fireworks (ADR 015).
+// Which merged pull requests a deploy celebrates with fireworks (ADR 016).
 // A deploy carries no "which PR" field, so the room keeps the numbers it has already celebrated and,
 // on the first good read of GitHub for a new version, celebrates the merged ones it hasn't seen. Only a
 // new version moves the list on: the reads for stale badge counts don't, so a PR merged before its
@@ -7,7 +7,7 @@
 //
 // A new VERSION.id is not always a deploy of new code: `wrangler secret put` (or a rollback) also makes
 // one, and a deploy from a branch can lack some merged PRs. Then the show comes early and the real
-// deploy shows nothing (ADR 015, Consequences).
+// deploy shows nothing (ADR 016, Consequences).
 
 const CELEBRATE_WINDOW_MS = 15 * 60_000; // a read this long after the deploy was first seen celebrates nothing
 const SHOW_LEAD_MS = 4000; // the show starts this far ahead, so the tabs reloading after the deploy see it from the start
