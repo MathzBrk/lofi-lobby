@@ -1776,7 +1776,7 @@ let mySeat = -1;
 // in your hand while you stand still (it goes away while you walk). Pixel art drawn
 // in code on the trainer's own 32px frame, on a plane that sits exactly over the trainer and takes
 // the same depth (its feet), so it is covered and uncovered together with the body.
-const HELD = ["nothing", "a laptop", "a coffee", "a book"];
+const HELD = ["nothing", "a laptop", "a coffee", "a book", "a cigarette"];
 // each view: [colour, x, y, w, h, glows, puff, only] rectangles on the 32x32 frame, drawn for a body
 // whose middle is on column 16 (front and back views) or whose front edge is on column 22 (side view,
 // looking right); bodyShape() measures the real sprite and the art moves to fit it.
@@ -1805,6 +1805,15 @@ const HELD_ART = {
     ["skin", 22, 27, 2, 1], ["#f4ead2", 24, 23, 1, 2, 0, undefined, 1], ["#f4ead2", 25, 22, 1, 1, 0, undefined, 1]],
   // from behind the body hides it: only the cover's corners show past the elbows
   "3up": [["#7a2430", 8, 25, 1, 2], ["#7a2430", 24, 25, 1, 2]],
+  // cigarette from the front: between the fingers of the hand at the side, the ember glowing at its
+  // tip (brighter on one frame, a drag) and a thin trail of smoke rising and swaying past the shoulder
+  "4down": [["skin", 21, 24, 2, 2], ["#f4f1ea", 23, 24, 3, 1], ["#d9a35b", 22, 24, 1, 1], ["#ff6a2a", 26, 24, 1, 1, 1],
+    ["#ffd36b", 26, 24, 1, 1, 1, undefined, 1], ["#b8b8c6", 26, 22, 1, 1, 1, 0], ["#9c9cac", 26, 22, 1, 1, 1, 2]],
+  // from the side: the hand held out in front of the chest, below the chin, cigarette pointing forward
+  "4right": [["skin", 22, 25, 2, 1], ["#d9a35b", 24, 25, 1, 1], ["#f4f1ea", 25, 25, 2, 1], ["#ff6a2a", 27, 25, 1, 1, 1],
+    ["#ffd36b", 27, 25, 1, 1, 1, undefined, 1], ["#b8b8c6", 27, 23, 1, 1, 1, 0], ["#9c9cac", 27, 23, 1, 1, 1, 2]],
+  // from behind the body hides it: only the ember past the elbow and the smoke above it
+  "4up": [["#ff6a2a", 24, 24, 1, 1, 1], ["#b8b8c6", 24, 22, 1, 1, 1, 0], ["#9c9cac", 24, 22, 1, 1, 1, 2]],
 };
 const FACE_LIGHT = [0.34, 0.22, 0.4, 0.28]; // how strong the screen's light is on each frame
 const FLICKER = [0, 1, 0, 2, 3, 1, 2, 0]; // uneven, like a screen changing
@@ -1849,9 +1858,9 @@ function bodyShape(tex, cfg, d) {
 }
 const heldTex = {};
 function heldTextures(item, d, shape) {
-  const tick = Math.floor(performance.now() / (item === 1 ? 260 : item === 2 ? 320 : 400));
-  // the screen's light, steam rising, or a page turning about every 4 seconds
-  const frame = item === 1 ? FLICKER[tick % 8] : item === 2 ? tick % 4 : +(tick % 10 === 9);
+  const tick = Math.floor(performance.now() / (item === 1 ? 260 : item === 2 ? 320 : item === 4 ? 420 : 400));
+  // the screen's light, steam or smoke rising, or a page turning about every 4 seconds
+  const frame = item === 1 ? FLICKER[tick % 8] : item === 2 || item === 4 ? tick % 4 : +(tick % 10 === 9);
   const key = item + d + frame + (shape?.key || "");
   if (heldTex[key]) return heldTex[key];
   const art = HELD_ART[item + (d === "left" ? "right" : d)] || HELD_ART[item + "down"];
@@ -1895,9 +1904,10 @@ function createHeld(feet) {
   return mesh;
 }
 // which way the item is drawn for a trainer, or null when it doesn't show: anything on a bench,
-// and the coffee while standing still
+// and the coffee or the cigarette while standing still
 const COFFEE = 2;
-const heldDir = (item, seat, still, d) => (!item ? null : seat ? seat.dir : item === COFFEE && still ? d : null);
+const ON_FOOT = [COFFEE, 4]; // what stays in your hand on your feet
+const heldDir = (item, seat, still, d) => (!item ? null : seat ? seat.dir : ON_FOOT.includes(item) && still ? d : null);
 // put the item over its trainer, seen from direction d (or hide it: d is null)
 function showHeld(mesh, body, cfg, item, d) {
   mesh.visible = !!(item && d);
@@ -1910,7 +1920,7 @@ function showHeld(mesh, body, cfg, item, d) {
 }
 const myHeld = createHeld(myFeet);
 let myHold = 0;
-try { myHold = [1, 2, 3].includes(+localStorage.getItem("hold")) ? +localStorage.getItem("hold") : 0; } catch {}
+try { myHold = [1, 2, 3, 4].includes(+localStorage.getItem("hold")) ? +localStorage.getItem("hold") : 0; } catch {}
 const sendHold = () => ws?.readyState === 1 && ws.send(JSON.stringify({ t: "hold", item: myHold }));
 const holdBtn = document.querySelector("#hold");
 // the button shows what you hold (the cup, unlit, when your hands are empty)
@@ -1920,12 +1930,18 @@ const HELD_ICONS = [
   '<path d="M20 16V7a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v9m16 0H4m16 0 1.28 2.55a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45L4 16"/>',
   CUP_ICON,
   '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  '<path d="M17 12H3a1 1 0 0 0-1 1v2a1 1 0 0 0 1 1h14"/><path d="M18 8c0-2.5-2-2.5-2-5"/><path d="M21 16a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M22 8c0-2.5-2-2.5-2-5"/><path d="M7 12v4"/>',
 ];
 let holdIcon = 0;
-// Q on a bench goes through everything; standing, it only picks the coffee up and puts it away
-const nextHold = () => (mySeat >= 0 ? (myHold + 1) % HELD.length : myHold === COFFEE ? 0 : COFFEE);
+// Q on a bench goes through everything; standing, it goes coffee, cigarette, empty hands
+const FOOT_CYCLE = [0, ...ON_FOOT];
+function nextHold() {
+  if (mySeat >= 0) return (myHold + 1) % HELD.length;
+  const i = FOOT_CYCLE.indexOf(myHold);
+  return i < 0 ? COFFEE : FOOT_CYCLE[(i + 1) % FOOT_CYCLE.length]; // a laptop or a book in hand gives way to the coffee
+}
 function updateHoldButton() {
-  const shown = mySeat >= 0 || myHold === COFFEE ? myHold : 0; // a laptop or a book waits for a bench
+  const shown = mySeat >= 0 || ON_FOOT.includes(myHold) ? myHold : 0; // a laptop or a book waits for a bench
   holdBtn.hidden = false;
   holdBtn.classList.toggle("on", shown > 0);
   holdBtn.setAttribute("aria-label", "hold " + HELD[nextHold()]);

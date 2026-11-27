@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **Cigarette**: **Q** now goes coffee, cigarette, empty hands while you stand (and through it on a bench too). The ember glows at night and a thin trail of smoke rises from the tip; everyone sees it, and like the coffee it goes away while you walk.
 - A small GitHub link beside the chat: the game is open source, come and contribute.
 - **Cap colour**: pick one of five cap colours on the enter/pause screen, next to a preview of your trainer; everyone sees it.
 - **Trainer and cap in the top card**: a male/female switch and, beside it, the cap you wear (drawn as a little cap, so it is not taken for the name colour's dot). Click the cap to see the other colours; picking one folds them away.
