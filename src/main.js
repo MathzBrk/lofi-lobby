@@ -6,6 +6,7 @@ import { createBoard, setupWall } from "./board.js";
 import { createStones } from "./stones.js";
 import { addSitFrames, sitFramePos } from "./ground-sit.js";
 import { createCapybara, CAPY_NEAR, CAPY_RADIUS, PHRASES as CAPY_PHRASES } from "./capybara.js";
+import { createOwl } from "./owl.js";
 import { createFishing, createFishingGear, FISH_NEAR, FISH_LEAVE } from "./fishing.js";
 import { createCat, CATS, CAT_NEAR, CAT_SIT_MS, CAT_RIDE_MS, PHRASES as CAT_PHRASES, RIDE_PHRASES as CAT_RIDE_PHRASES } from "./cat.js";
 import { CAROUSEL, carouselSeat, createCarousel, inClearing, isCarouselSeat, onCarousel } from "./carousel.js";
@@ -323,6 +324,7 @@ function prepareTown(fbx) {
     board.position.y = groundHeight(board.position.x, board.position.z);
     placeCapybara();
     placeCapyWalk();
+    placeOwl();
     mergeTown(fbx);
     markLampShadowsStale(); // the town, the lamps and everything around them just took their places
     buildCatNavGrid();
@@ -1697,6 +1699,19 @@ function placeLampPost(p) {
   }
 }
 
+// ---- Owl (on the message wall's roof; flies to the two nearest lamp posts and back) ----
+const owl = createOwl();
+scene.add(owl.mesh);
+// perches: the top of the wall's roof and the caps of the two lamp posts closest to the wall
+function placeOwl() {
+  const b = board.position;
+  const posts = [...lampPosts].sort((p, q) => p.position.distanceTo(b) - q.position.distanceTo(b)).slice(0, 2);
+  owl.setPerches(
+    [new THREE.Vector3(b.x, b.y + 6.85, b.z), ...posts.map((p) => p.position.clone().add(new THREE.Vector3(0, 9.55, 0)))],
+    performance.now(),
+  );
+}
+
 // ---- Capybara (middle of town; E feeds it) ----
 const capy = createCapybara();
 capy.mesh.position.set(6, 0, 4);
@@ -2641,6 +2656,7 @@ gl_Position.z = (feetClip.z / feetClip.w) * gl_Position.w;`,
 }
 const myFeet = useFeetDepth(sprite);
 const capyFeet = useFeetDepth(capy.mesh);
+const owlFeet = useFeetDepth(owl.mesh);
 const _toCam = new THREE.Vector3();
 const occlusionRay = new THREE.Ray();
 const _hit = new THREE.Vector3();
@@ -2671,6 +2687,7 @@ function setFeet(feet, x, y, z) {
 function updateOcclusion() {
   setFeet(myFeet, pos.x + slide.x, pos.y, pos.z + slide.z);
   setFeet(capyFeet, capy.mesh.position.x, capy.mesh.position.y, capy.mesh.position.z);
+  setFeet(owlFeet, owl.mesh.position.x, owl.mesh.position.y, owl.mesh.position.z);
   for (const o of others.values()) setFeet(o.feet, o.mesh.position.x, o.mesh.position.y, o.mesh.position.z);
   // After trainers: a perched cat shares its rider's depth nudged slightly forward so it sits
   // over the cap without Z-fighting while still hiding behind walls/benches in front of the rider.
@@ -4497,6 +4514,8 @@ function loop() {
   camera.position.set(pos.x + slide.x, pos.y + 38, pos.z + 42 + slide.z);
   camera.lookAt(pos.x + slide.x, pos.y + 1, pos.z + slide.z);
   updateCapy();
+  owl.update(performance.now(), pos);
+  owl.mesh.rotation.set(camera.rotation.x * 0.5, 0, 0); // faces the camera like the trainers
   updateFishing();
   updateCats();
   updateOcclusion();
@@ -4510,7 +4529,7 @@ function loop() {
   // someone going round would make them redraw their 6 shadow passes every frame, all night
   sprite.castShadow = !riding;
   const movers = [...others.values()].filter((o) => !isRideSeat(o.seat)).map((o) => o.mesh);
-  updateLampShadows([...(riding ? [] : [sprite]), capy.mesh, ...cats.map((c) => c.mesh), ...movers]);
+  updateLampShadows([...(riding ? [] : [sprite]), capy.mesh, owl.mesh, ...cats.map((c) => c.mesh), ...movers]);
   renderer.render(scene, camera);
   updateNameTags();
   updateBubbles();
